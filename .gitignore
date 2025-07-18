@@ -166,3 +166,8 @@ __agent_data__/
 
 # Experimentation
 .*
+
+# Logs
+crash_state.json
+.errors
+.messages
