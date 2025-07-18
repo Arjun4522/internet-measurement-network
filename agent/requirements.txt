@@ -1,0 +1,10 @@
+typer
+nats-py[nkeys]
+watchdog
+fastapi
+uvicorn
+pydantic
+pydantic-settings
+netifaces
+PyJWT
+pydantic
