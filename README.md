@@ -3,7 +3,7 @@ The entire AIORI Internet Measurement Network - Redesigned
 
 ## Start Nats.io server with the command
 ```
-$ nats-server -n newton -m 8222 -DVV
+$ nats-server -n newton -p 4222 -m 8222 -DVV
 ```
 
 > [!NOTE]

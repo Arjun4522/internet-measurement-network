@@ -1,8 +1,8 @@
 import asyncio
 from typing import List
-from base import logger
-from config import settings
-from module_manager import ModuleManager
+from aiori_agent.config import settings
+from aiori_agent.module.base import logger, BaseWorker
+from aiori_agent.module.module_manager import ModuleManager
 from nats.aio.client import Client as NATS
 
 
@@ -19,21 +19,27 @@ class NatsClient:
     async def __aenter__(self):
         await self.nc.connect(
             servers = self.url,
+            name = self.name,
+            pedantic = True,
+            verbose = True,
+
+            # Reconnect
+            allow_reconnect = True,
+            connect_timeout = 5,
+            reconnect_time_wait = 3,
+            max_reconnect_attempts = 10,
+
+            # Authentication & Authorization
+            # user = ,
+            # password = ,
+            # user_credentials = ,
+
+            # Callbacks
             error_cb = self.error_cb,
             closed_cb = self.closed_cb,
             disconnected_cb = self.disconnected_cb,
             discovered_server_cb = self.disconnected_server_cb,
             reconnected_cb = self.reconnected_cb,
-            name = self.name,
-            pedantic = True,
-            verbose = True,
-            allow_reconnect = True,
-            # connect_timeout = ,
-            # reconnect_time_wait = ,
-            # max_reconnect_attempts = ,
-            # user = ,
-            # password = ,
-            # user_credentials = ,
             # user_jwt_cb = ,
             # signature_cb=
         )
@@ -69,12 +75,17 @@ class Agent:
     """
 
     def __init__(self):
-        self.agent_id = settings.agent_id
-        self.agent_name = settings.agent_name
-        self.manager = None
-        self.nc = None
+        self.agent_id : str = settings.agent_id
+        self.agent_name : str = settings.agent_name
+        self.manager : ModuleManager = None
+        self.nc : NATS = None
 
-    async def start(self):
+    def alive_and_active(self, ):
+        if self.nc:
+            return self.nc.is_connected
+        return False
+
+    async def start(self, ):
         """
         Start NATS and load modules.
         """
@@ -84,9 +95,16 @@ class Agent:
             await self.manager.start_all()
             await self._keep_running()
 
+    async def stop(self, ):
+        for module_name, module in self.manager.running_workers.items():
+            module.stop(msg="Agent stopped", timeout=5)
+        await self.nc.close()
+        self._keep_running().close()
+
     async def _keep_running(self):
         """
         Keeps the agent running.
         """
         while True:
-            await asyncio.sleep(3600)
+            # Wait 1 minute
+            await asyncio.sleep(60)

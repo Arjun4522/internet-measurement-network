@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools", "cython"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aiori-agent"
+readme = "README.md"
+version="0.0.1"
+authors = [
+  { name="Arnav Das", email="arnav.das88@gmail.com" },
+]
+description = "Aiori agent daemon"
+requires-python = ">=3"
+dependencies = ["rich", "wheel", "typer"]
+classifiers = [
+        "Development Status :: 5 - Production/Stable",
+        "Environment :: Console",
+        "Environment :: No Input/Output (Daemon)",
+        "Intended Audience :: Developers",
+        "Intended Audience :: System Administrators",
+        "License :: OSI Approved :: GNU AFFERO",
+        "Programming Language :: Python",
+        "Programming Language :: Python :: 3",
+]
+
+[project.optional-dependencies]
+all = [
+    "rich", 
+    "typer", 
+    "wheel",
+    "pytest",
+    "black",
+    "isort",
+    "mkdocs", 
+    "mkdocs-material",
+    "mkdocstrings[python]",
+]
+develop = [
+    "rich", 
+    "typer", 
+    "pytest",
+    "black",
+    "isort",
+    "mkdocs", 
+    "mkdocs-material",
+    "mkdocstrings[python]",
+]
+doc = [
+    "mkdocs", 
+    "mkdocs-material",
+    "mkdocstrings[python]",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/indiainternetfoundation/aiori-agent"
+"Bug Tracker" = "https://github.com/indiainternetfoundation/aiori-agent/issues"
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests"
+]

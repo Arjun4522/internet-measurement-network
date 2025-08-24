@@ -12,8 +12,8 @@ from typing import Dict, Optional
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from config import settings
-from base import logger, BaseWorker
+from aiori_agent.config import settings
+from aiori_agent.module.base import logger, BaseWorker
 
 class EventLoopException(Exception):
     pass

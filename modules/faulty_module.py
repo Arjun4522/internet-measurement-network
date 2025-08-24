@@ -2,7 +2,8 @@ import json
 import time
 import random
 import asyncio
-from base import BaseWorker
+from typing import Optional
+from aiori_agent.module.base import BaseWorker
 from nats.aio.msg import Msg
 
 
@@ -56,3 +57,8 @@ class FaultyModule(BaseWorker):
         except Exception as e:
             self.logger.exception(f"{self.name}: Failed during handle")
             await self.nc.publish(self.sub_err, str(e).encode())
+
+    class Meta:
+        author: Optional[str] = "Arnav Das"
+        description: Optional[str] = "A test module to simulate failure, crash, or delay based on input."
+        version: Optional[str] = "1.0.0"
