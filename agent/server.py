@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from aiori_agent.daemon.agent import Agent
+from agent.agent import Agent
 
 app = FastAPI(title="Agent Control API")
 

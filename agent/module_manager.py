@@ -12,8 +12,8 @@ from typing import Dict, Optional
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
-from aiori_agent.config import settings
-from aiori_agent.module.base import logger, BaseWorker
+from .config import settings
+from .base import logger, BaseWorker
 
 class EventLoopException(Exception):
     pass
@@ -72,6 +72,7 @@ class ModuleManager(FileSystemEventHandler):
         Cancel existing worker, reload the module, and restart the worker.
         """
         try:
+            # BUGS: The old worker might not stop immediately
             # Cancel and remove old task
             if module_name in self.running_workers:
                 worker = self.running_workers[module_name]

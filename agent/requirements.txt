@@ -8,3 +8,5 @@ pydantic-settings
 netifaces
 PyJWT
 pydantic
+icmplib 
+tcping

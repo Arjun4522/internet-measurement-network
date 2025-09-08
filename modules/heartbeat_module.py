@@ -9,8 +9,7 @@ import socket
 import traceback
 import platform
 import netifaces
-from typing import Optional
-from aiori_agent.module.base import BaseWorker
+from agent.base import BaseWorker
 from nats.aio.msg import Msg
 
 class HeartbeatModule(BaseWorker):
@@ -152,9 +151,3 @@ class HeartbeatModule(BaseWorker):
         }
         await self.nc.publish(self.sub_out, json.dumps(heartbeat).encode())
         self.logger.debug(f"{self.name}: Published heartbeat → {self.sub_out}")
-
-    class Meta:
-        author: Optional[str] = "Arnav Das"
-        description: Optional[str] = "A minimal working module that echoes heartbeat messages."
-        version: Optional[str] = "1.0.0"
-
