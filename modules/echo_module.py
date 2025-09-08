@@ -1,9 +1,9 @@
 import json
 import time
 import random
-from aiori_agent.module.base import BaseWorker
+from agent.base import BaseWorker
 from nats.aio.msg import Msg
-from typing import Optional
+
 
 class WorkingModule(BaseWorker):
     """
@@ -40,8 +40,3 @@ class WorkingModule(BaseWorker):
         except Exception as e:
             self.logger.exception(f"{self.name}: Error during handle")
             await self.nc.publish(self.sub_err, str(e).encode())
-
-    class Meta:
-        author: Optional[str] = "Arnav Das"
-        description: Optional[str] = "A minimal working module that echoes back received messages."
-        version: Optional[str] = "1.0.0"

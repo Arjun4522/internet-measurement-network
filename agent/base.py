@@ -5,7 +5,6 @@ import asyncio
 import importlib.util
 import traceback
 import logging
-from typing import Optional
 from pathlib import Path
 from nats.aio.client import Client as NATS
 
@@ -52,8 +51,3 @@ class BaseWorker:
         self.running = False
         self.task = None
         return True
-
-    class Meta:
-        author: Optional[str] = None
-        description: Optional[str] = None
-        version: Optional[str] = None
