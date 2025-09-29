@@ -2,7 +2,7 @@ import json
 import time
 import random
 import asyncio
-from agent.base import BaseWorker
+from aiori_agent.base import BaseWorker
 from nats.aio.msg import Msg
 
 
@@ -18,6 +18,9 @@ class FaultyModule(BaseWorker):
         self.sub_out = f"agent.{self.name}.out"
         self.sub_err = f"agent.{self.name}.error"
         self.processed_ids = set()
+
+    async def setup(self):
+        return True
 
     async def run(self):
         await self.nc.subscribe(self.sub_in, cb=self.handle)
@@ -40,7 +43,9 @@ class FaultyModule(BaseWorker):
             # Simulate duplicate processing (ACID)
             message_id = payload.get("id")
             if message_id and message_id in self.processed_ids:
-                self.logger.warning(f"{self.name}: Duplicate message ignored: {message_id}")
+                self.logger.warning(
+                    f"{self.name}: Duplicate message ignored: {message_id}"
+                )
                 return
             if message_id:
                 self.processed_ids.add(message_id)
@@ -49,7 +54,7 @@ class FaultyModule(BaseWorker):
             response = {
                 "from_module": self.name,
                 "processed_at": time.time(),
-                "input": payload
+                "input": payload,
             }
             await self.nc.publish(self.sub_out, json.dumps(response).encode())
 

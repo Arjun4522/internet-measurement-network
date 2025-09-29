@@ -1,7 +1,6 @@
 import json
 import time
-import random
-from agent.base import BaseWorker
+from aiori_agent.base import BaseWorker
 from nats.aio.msg import Msg
 
 
@@ -16,6 +15,9 @@ class WorkingModule(BaseWorker):
         self.sub_in = f"agent.{self.name}.in"
         self.sub_out = f"agent.{self.name}.out"
         self.sub_err = f"agent.{self.name}.error"
+
+    async def setup(self):
+        return True
 
     async def run(self):
         """

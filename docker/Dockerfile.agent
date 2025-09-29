@@ -6,4 +6,4 @@ COPY ./agent/requirements.txt /agent/requirements.txt
 
 RUN pip install --no-cache-dir --upgrade -r /agent/requirements.txt
 
-CMD ["python", "-m", "agent", "start"]
+CMD ["python", "-m", "agent"]

@@ -1,0 +1,108 @@
+# Opensearch Data Prepper
+# Main telemetry pipeline with unified source
+otel-telemetry-pipeline:
+  source:
+    otlp:
+      ssl: false
+      port: 21891
+  route:
+    - logs: 'getEventType() == "LOG"'
+    - traces: 'getEventType() == "TRACE"'
+    - metrics: 'getEventType() == "METRIC"'
+  sink:
+    - pipeline:
+        name: "logs-pipeline"
+        routes:
+          - "logs"
+    - pipeline:
+        name: "traces-pipeline"
+        routes:
+          - "traces"
+    - pipeline:
+        name: "metrics-pipeline"
+        routes:
+          - "metrics"
+
+# Logs pipeline
+logs-pipeline:
+  source:
+    pipeline:
+      name: "otel-telemetry-pipeline"
+  sink:
+    - opensearch:
+        hosts: ["https://opensearch:9200"]
+        username: admin
+        password: "!1Fon@123"
+        insecure: true
+        index_type: custom
+        index: ss4o_logs-%{yyyy.MM.dd}
+
+# Traces pipeline
+traces-pipeline:
+  source:
+    pipeline:
+      name: "otel-telemetry-pipeline"
+  processor:
+  sink:
+    - pipeline:
+        name: "traces-raw-pipeline"
+    - pipeline:
+        name: "service-map-pipeline"
+
+# Traces raw processing pipeline
+traces-raw-pipeline:
+  source:
+    pipeline:
+      name: "traces-pipeline"
+  processor:
+    - delete_entries:
+        with_keys: ["resource", ]
+    - otel_trace_raw:
+    - otel_trace_group:
+        hosts: ["https://opensearch:9200"]
+        username: admin
+        password: "!1Fon@123"
+        insecure: true
+  sink:
+    - opensearch:
+        hosts: ["https://opensearch:9200"]
+        username: admin
+        password: "!1Fon@123"
+        insecure: true
+        index_type: trace-analytics-raw
+        # index: otel-v1-apm-span-%{yyyy.MM.dd}
+
+# Service map processing pipeline
+service-map-pipeline:
+  source:
+    pipeline:
+      name: "traces-pipeline"
+  processor:
+    - service_map_stateful:
+  sink:
+    - opensearch:
+        hosts: ["https://opensearch:9200"]
+        username: admin
+        password: "!1Fon@123"
+        insecure: true
+        index_type: trace-analytics-service-map
+
+# Metrics pipeline
+metrics-pipeline:
+  source:
+    pipeline:
+      name: "otel-telemetry-pipeline"
+  processor:
+    - otel_metrics:
+        calculate_histogram_buckets: true
+        calculate_exponential_histogram_buckets: true
+        exponential_histogram_max_allowed_scale: 10
+        flatten_attributes: false
+  sink:
+    - opensearch:
+        hosts: ["https://opensearch:9200"]
+        username: admin
+        password: "!1Fon@123"
+        insecure: true
+        index_type: custom
+        index: ss4o_metrics-otel-%{yyyy.MM.dd}

@@ -11,7 +11,7 @@ authors = [
 ]
 description = "Aiori agent daemon"
 requires-python = ">=3"
-dependencies = ["rich", "wheel", "typer"]
+dependencies = ["rich", "wheel", "typer", "nats-py[nkeys]", "watchdog", "pydantic", "pydantic-settings", "fastapi", "git+https://github.com/arnavdas88/nats-observatory"]
 classifiers = [
         "Development Status :: 5 - Production/Stable",
         "Environment :: Console",
@@ -21,34 +21,6 @@ classifiers = [
         "License :: OSI Approved :: GNU AFFERO",
         "Programming Language :: Python",
         "Programming Language :: Python :: 3",
-]
-
-[project.optional-dependencies]
-all = [
-    "rich", 
-    "typer", 
-    "wheel",
-    "pytest",
-    "black",
-    "isort",
-    "mkdocs", 
-    "mkdocs-material",
-    "mkdocstrings[python]",
-]
-develop = [
-    "rich", 
-    "typer", 
-    "pytest",
-    "black",
-    "isort",
-    "mkdocs", 
-    "mkdocs-material",
-    "mkdocstrings[python]",
-]
-doc = [
-    "mkdocs", 
-    "mkdocs-material",
-    "mkdocstrings[python]",
 ]
 
 [project.urls]
