@@ -12,6 +12,8 @@ from typing import Dict, Optional
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+from aiori_agent.utils import camel_to_snake
+
 from .config import settings
 from .base import logger, BaseWorker
 
@@ -97,36 +99,30 @@ class ModuleManager(FileSystemEventHandler):
             self.loaded_modules[module_name] = mod
 
             # Instantiate valid BaseWorker subclass
-            worker_class = next(
-                (
-                    cls
-                    for cls in mod.__dict__.values()
-                    if isinstance(cls, type)
-                    and issubclass(cls, BaseWorker)
-                    and cls is not BaseWorker
-                ),
-                None,
-            )
+            all_worker_classes = [ cls for cls in mod.__dict__.values() 
+                            if isinstance(cls, type) and issubclass(cls, BaseWorker) and cls is not BaseWorker
+            ]
 
-            if not worker_class:
-                logger.warning(f"⚠️ No valid BaseWorker found in {module_name}")
-                return
+            for worker_class in all_worker_classes:
+                if not worker_class:
+                    logger.warning(f"⚠️ No valid BaseWorker found in {module_name}")
+                    return
 
-            shared = {"metadata": {"module": module_name}}
-            worker = worker_class(
-                name=module_name,
-                agent=self.agent,
-                nc=self.nc,
-                logger=logger,
-                shared=shared,
-            )
-            if await worker.setup():
-                worker.start(self._on_crash)  # Presumed to spawn internal task
-                self.running_workers[module_name] = worker
-                logger.info(f"✅ Worker started: {module_name}")
-                await self.nc.publish(
-                    "agent", f"Worker `{module_name}` loaded".encode()
+                shared = {"metadata": {"module": module_name}}
+                worker = worker_class(
+                    name=camel_to_snake(worker_class.__name__),
+                    agent=self.agent,
+                    nc=self.nc,
+                    logger=logger,
+                    shared=shared,
                 )
+                if await worker.setup():
+                    worker.start(self._on_crash)  # Presumed to spawn internal task
+                    self.running_workers[module_name] = worker
+                    logger.info(f"✅ Worker started: {module_name}")
+                    await self.nc.publish(
+                        "agent", f"Worker `{module_name}` loaded".encode()
+                    )
 
         except Exception as e:
             logger.error(f"❌ Error loading module `{module_name}`: {e}")

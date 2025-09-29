@@ -1,0 +1,10 @@
+rich
+wheel
+typer
+fastapi[standard]
+nats-py[nkeys]
+watchdog
+pydantic
+pydantic-settings
+openapi-schema-validator
+git+https://github.com/arnavdas88/nats-observatory

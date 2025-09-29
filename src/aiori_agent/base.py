@@ -36,6 +36,10 @@ class BaseWorker:
         self.shared = shared
         self.task = None
 
+        self.sub_in = None
+        self.sub_out = None
+        self.sub_err = None
+
     def serializer(self, ) -> Optional[Type["MeasurementQuery"]]:
         # raise NotImplementedError("Worker must implement serializer()")
         return None
