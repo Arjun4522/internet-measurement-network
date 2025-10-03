@@ -1,20 +1,8 @@
-import os
 import sys
 import time
 import asyncio
 import logging
-import traceback
-import importlib.util
-from typing import Optional, Type, override
-from pathlib import Path
-import uuid
-
-from pydantic import BaseModel, Field, computed_field
-
-from nats.aio.client import Client as NATS
-
-from aiori_agent.utils import get_model_name
-
+from typing import Annotated, Optional, Type
 
 # Configure logging
 logging.basicConfig(
@@ -71,13 +59,3 @@ class BaseWorker:
         self.running = False
         self.task = None
         return True
-
-class MeasurementQuery(BaseModel):
-    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4)
-    # type: Optional[str] = Field(default_factory=get_model_name)
-
-    # @computed_field
-    # @property
-    @classmethod
-    def model_type(cls) -> str:
-        return get_model_name(cls)

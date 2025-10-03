@@ -1,6 +1,7 @@
 import sys
 import subprocess
 import importlib.util
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -30,7 +31,7 @@ def check_package_availability(package_name: str):
     return True
 
 
-def get_model_name(model: BaseModel) -> str:
+def get_model_name(model: Any) -> str:
     return camel_to_snake(model.__name__)
 
 import re
