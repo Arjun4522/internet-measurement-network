@@ -117,3 +117,11 @@ Send a JSON message to the agent's input subject:
 | `nui` | `ghcr.io/nats-nui/nui` | 31312 | Native UI |
 | `agent_1` | Custom build | 9101 | Measurement agent 1 |
 | `agent_2` | Custom build | 9102 | Measurement agent 2 |
+
+## Run
+
+```sh
+$ python3 -m nats_observe
+$ python3 -m fastapi run server/main.py
+$ python3 -m aiori_agent  --nats_url nats://192.168.19.169:4222 --agent_id f7c34015-2b5c-4b95-b1bf-5e5391241dac --modules_path /internet-measurement-network/modules/
+```

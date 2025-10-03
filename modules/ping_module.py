@@ -88,7 +88,7 @@ class PingModule(BaseWorker):
                 )
 
             except Exception as ex:
-                from modules.tcping import TCPing
+                from tcping import TCPing
                 async_ping = TCPing(
                     host = str(query.host), 
                     port = query.port, 

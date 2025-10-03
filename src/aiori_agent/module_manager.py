@@ -93,6 +93,9 @@ class ModuleManager(FileSystemEventHandler):
                 del sys.modules[module_name]
 
             # Reload module from disk
+            if str(path.parent) not in sys.path:
+                sys.path.append(str(path.parent))
+            
             spec = importlib.util.spec_from_file_location(module_name, path)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)

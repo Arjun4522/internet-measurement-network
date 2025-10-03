@@ -1,1 +1,1 @@
-from modules.heartbeat import HeartbeatModule
+from heartbeat.worker import HeartbeatModule

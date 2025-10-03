@@ -13,8 +13,8 @@ from aiori_agent.utils import check_package_availability, install_package
 
 from nats.aio.msg import Msg
 
-from modules.heartbeat.utils import _safe_get_user_info, _safe_get_system_info, _safe_get_network_info, _safe_agent_version, _safe_loaded_modules
-from modules.heartbeat.model import Agent, HeartbeatModel
+from heartbeat.utils import _safe_get_user_info, _safe_get_system_info, _safe_get_network_info, _safe_agent_version, _safe_loaded_modules
+from heartbeat.model import Agent, HeartbeatModel
 
 class HeartbeatModule(BaseWorker):
     """

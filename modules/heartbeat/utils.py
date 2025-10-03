@@ -5,7 +5,7 @@ import platform
 import pwd
 from typing import Mapping
 
-from modules.heartbeat.model import Modules, NetworkInterface, System, Loadavg, User, ModuleSpecification
+from heartbeat.model import Modules, NetworkInterface, System, Loadavg, User, ModuleSpecification
 
 def _safe_get_user_info(module) -> User:
     """Safely collects user information."""
