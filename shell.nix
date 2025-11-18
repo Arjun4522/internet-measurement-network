@@ -7,7 +7,7 @@ pkgs.mkShell {
     python312Packages.setuptools
     python312Packages.wheel
     # Add netifaces directly from nixpkgs to avoid compilation issues
-    # python312Packages.netifaces
+    python312Packages.netifaces
     docker
     docker-compose
     nats-server
