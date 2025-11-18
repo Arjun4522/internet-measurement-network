@@ -46,6 +46,20 @@ services:
 #    networks:
 #      - aiori-net
 
+  server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.server
+    container_name: server
+    ports:
+      - "8000:8000"  # Server API
+    depends_on:
+      - nats
+    networks:
+      - aiori-net
+    environment:
+      - NATS_URL=nats://nats-server:4222
+
   agent_1:
     build:
       context: .
@@ -62,6 +76,7 @@ services:
       - "9101:9101"  # Agent metrics/API
     depends_on:
       - nats
+      - server
 #      - otel-collector
     networks:
       - aiori-net
@@ -83,6 +98,7 @@ services:
       - "9102:9102"  # Changed port to avoid conflict
     depends_on:
       - nats
+      - server
 #      - otel-collector
     networks:
       - aiori-net

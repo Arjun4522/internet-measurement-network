@@ -17,7 +17,8 @@ from openapi_schema_validator import validate
 from jsonschema.exceptions import ValidationError
 
 # ======== CONFIG ============
-NATS_URL = ["nats://192.168.0.112:4222"]
+import os
+NATS_URL = [os.environ.get("NATS_URL", "nats://localhost:4222")]
 HEARTBEAT_SUBJECT = "agent.heartbeat_module"
 HEARTBEAT_INTERVAL = 5                      # Agents send heartbeat every 5s
 HEARTBEAT_TIMEOUT = HEARTBEAT_INTERVAL * 2  # If no heartbeat in 10s => dead
