@@ -67,9 +67,17 @@ class ModuleManager(FileSystemEventHandler):
         """
         Load and run all modules in the directory.
         """
+        # Load .py files directly in the modules directory
         for file in self.modules_dir.glob("*.py"):
             if not file.name.startswith("__"):
                 await self._reload_module(file.stem, file)
+        
+        # Load worker.py files from subdirectories
+        for subdir in self.modules_dir.iterdir():
+            if subdir.is_dir() and not subdir.name.startswith("__"):
+                worker_file = subdir / "worker.py"
+                if worker_file.exists():
+                    await self._reload_module(subdir.name, worker_file)
 
     async def _reload_module(self, module_name: str, path: Path):
         """

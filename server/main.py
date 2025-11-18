@@ -17,7 +17,7 @@ from openapi_schema_validator import validate
 from jsonschema.exceptions import ValidationError
 
 # ======== CONFIG ============
-NATS_URL = ["nats://192.168.19.169:4222"]
+NATS_URL = ["nats://192.168.0.112:4222"]
 HEARTBEAT_SUBJECT = "agent.heartbeat_module"
 HEARTBEAT_INTERVAL = 5                      # Agents send heartbeat every 5s
 HEARTBEAT_TIMEOUT = HEARTBEAT_INTERVAL * 2  # If no heartbeat in 10s => dead
@@ -65,6 +65,7 @@ async def nats_connect():
             print("[Cache] Error parsing heartbeat:", e)
 
     await nc.subscribe(HEARTBEAT_SUBJECT, cb=heartbeat_handler)
+    print(f"[Cache] Subscribed to {HEARTBEAT_SUBJECT}")
 
 
 # 🧹 Background cleanup task (mark dead)
@@ -158,9 +159,9 @@ async def run_module(
             try:
                 validate(module_request, all_spec[module_name]['input_schema'])
             except ValidationError as ex:
-                return {"error": "Validation Error", "message": ex.message}
+                return {"error": "Validation Error", "message": str(ex)}
             except Exception as ex:
-                return {"error": "Unknown Error", "message": ex.message}
+                return {"error": "Unknown Error", "message": str(ex)}
 
             await nc.publish(all_spec[module_name]['input_subject'], json.dumps(module_request).encode())
 
