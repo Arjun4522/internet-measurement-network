@@ -22,11 +22,21 @@ NATS_URL = [os.environ.get("NATS_URL", "nats://localhost:4222")]
 HEARTBEAT_SUBJECT = "agent.heartbeat_module"
 HEARTBEAT_INTERVAL = 5                      # Agents send heartbeat every 5s
 HEARTBEAT_TIMEOUT = HEARTBEAT_INTERVAL * 2  # If no heartbeat in 10s => dead
+
+# OTel configuration
+OTLP_TRACE_ENDPOINT = os.environ.get("OTLP_TRACE_ENDPOINT", "otel-collector:4317")
+OTLP_METRICS_ENDPOINT = os.environ.get("OTLP_METRICS_ENDPOINT", "otel-collector:4317")
+OTLP_LOGS_ENDPOINT = os.environ.get("OTLP_LOGS_ENDPOINT", "otel-collector:4317")
 # ============================
 
 # 🧠 In-memory cache
 agent_cache: Dict[str, AgentInfo] = {}
-settings = NATSotelSettings(service_name="server", servers=NATS_URL)
+settings = NATSotelSettings(
+    service_name="server", 
+    servers=NATS_URL,
+    otlp_trace_endpoint=OTLP_TRACE_ENDPOINT,
+    otlp_logs_endpoint=OTLP_LOGS_ENDPOINT
+)
 nc: NATSotel = NATSotel(settings)
 
 app = FastAPI(title="Agent Server", version="1.0")
