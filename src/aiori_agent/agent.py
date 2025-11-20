@@ -23,7 +23,7 @@ class NatsClient:
         self.name: str = name
         self.url: list[str] = url.split(";")
         otel_settings = NATSotelSettings(
-            service_name="agent",
+            service_name=self.name,
             servers=self.url,
             otlp_trace_endpoint=settings.otlp_trace_endpoint,
             otlp_logs_endpoint=settings.otlp_logs_endpoint
