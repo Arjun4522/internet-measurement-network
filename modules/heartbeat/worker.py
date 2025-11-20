@@ -81,6 +81,7 @@ class HeartbeatModule(BaseWorker):
         )
 
     async def _send_heartbeat(self):
+        # Create a trace group for this module operation
         heartbeat = HeartbeatModel(
             module = self.name,
             timestamp = time.time(),

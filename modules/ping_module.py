@@ -66,6 +66,7 @@ class PingModule(BaseWorker):
     async def handle(self, msg: Msg):
         """
         Processes incoming ping requests and sends results.
+        This operation will be grouped under "ping_module" trace group.
         """
         try:
             # Log raw message for debugging

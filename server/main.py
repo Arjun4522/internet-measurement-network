@@ -31,6 +31,8 @@ OTLP_LOGS_ENDPOINT = os.environ.get("OTLP_LOGS_ENDPOINT", "otel-collector:4317")
 
 # 🧠 In-memory cache
 agent_cache: Dict[str, AgentInfo] = {}
+# 📊 Results cache
+results_cache: Dict[str, Dict[str, Any]] = {}  # {agent_id: {request_id: result}}
 settings = NATSotelSettings(
     service_name="server", 
     servers=NATS_URL,
@@ -60,6 +62,7 @@ async def nats_connect():
                 existing.alive = True
                 existing.config = data
                 existing.total_heartbeats += 1
+                print(f"[Cache] Updated heartbeat: {hb.agent_id} @ {hb.timestamp}")
             else:
                 agent_cache[hb.agent_id] = AgentInfo(
                     agent_id=hb.agent_id,
@@ -70,6 +73,15 @@ async def nats_connect():
                     first_seen=now,
                     total_heartbeats=1
                 )
+                
+                # Subscribe to result topics for this new agent
+                print(f"[Subscription] New agent detected: {hb.agent_id}, subscribing to results...")
+                try:
+                    await subscribe_to_agent_results(hb.agent_id)
+                    print(f"[Subscription] Successfully subscribed to results for agent: {hb.agent_id}")
+                except Exception as e:
+                    print(f"[Subscription] Error subscribing to results for agent {hb.agent_id}: {e}")
+                
             print(f"[Cache] Updated heartbeat: {hb.agent_id} @ {hb.timestamp}")
 
         except Exception as e:
@@ -77,6 +89,43 @@ async def nats_connect():
 
     await nc.subscribe(HEARTBEAT_SUBJECT, cb=heartbeat_handler)
     print(f"[Cache] Subscribed to {HEARTBEAT_SUBJECT}")
+    
+    # Also subscribe to existing agents after a delay
+    print("[Startup] Scheduling subscription to existing agents...")
+    asyncio.create_task(subscribe_existing_agents())
+
+
+# 📥 Subscribe to agent result topics
+async def subscribe_to_agent_results(agent_id: str):
+    """Subscribe to result topics for a specific agent"""
+    print(f"[Subscription] Attempting to subscribe to results for agent: {agent_id}")
+    
+    async def result_handler(msg: Msg):
+        try:
+            print(f"[Results] Received message on result topic for agent {agent_id}")
+            data = json.loads(msg.data.decode())
+            request_id = data.get("id")
+            
+            if request_id:
+                # Store result in cache
+                if agent_id not in results_cache:
+                    results_cache[agent_id] = {}
+                results_cache[agent_id][request_id] = data
+                print(f"[Results] Stored result for agent {agent_id}, request {request_id}")
+            else:
+                print(f"[Results] Received message without ID from agent {agent_id}")
+                
+        except Exception as e:
+            print(f"[Results] Error handling result from agent {agent_id}: {e}")
+    
+    # Subscribe to the agent's output topic
+    out_topic = f"agent.{agent_id}.out"
+    try:
+        await nc.subscribe(out_topic, cb=result_handler)
+        print(f"[Results] Successfully subscribed to {out_topic}")
+    except Exception as e:
+        print(f"[Results] Error subscribing to {out_topic}: {e}")
+        raise
 
 
 # 🧹 Background cleanup task (mark dead)
@@ -96,6 +145,23 @@ async def cleanup_agents():
 async def startup_event():
     asyncio.create_task(nats_connect())
     asyncio.create_task(cleanup_agents())
+    
+    
+async def subscribe_existing_agents():
+    """Subscribe to result topics for existing agents"""
+    print("[Startup] Waiting for initial heartbeats...")
+    # Wait a bit for initial heartbeats to come in
+    await asyncio.sleep(2)
+    
+    print(f"[Startup] Found {len(agent_cache)} agents in cache, subscribing to results...")
+    # Subscribe to existing agents
+    for agent_id in list(agent_cache.keys()):  # Use list() to avoid "dictionary changed size during iteration"
+        print(f"[Startup] Subscribing to results for existing agent: {agent_id}")
+        try:
+            await subscribe_to_agent_results(agent_id)
+            print(f"[Startup] Successfully subscribed to results for agent: {agent_id}")
+        except Exception as e:
+            print(f"[Startup] Error subscribing to results for agent {agent_id}: {e}")
 
 
 # ======================
@@ -146,7 +212,42 @@ async def get_agent(agent_id: str):
     return agent
 
 
-@app.post("/agent/{agent_id}/{module_name}", )
+@app.get("/agents/{agent_id}/results/{request_id}")
+async def get_agent_result(agent_id: str, request_id: str):
+    """
+    Get result for a specific agent and request ID.
+    """
+    agent_results = results_cache.get(agent_id, {})
+    result = agent_results.get(request_id)
+    
+    if not result:
+        raise HTTPException(status_code=404, detail="Result not found")
+        
+    return result
+
+
+@app.get("/agents/{agent_id}/results")
+async def get_agent_results(agent_id: str):
+    """
+    Get all results for a specific agent.
+    """
+    return results_cache.get(agent_id, {})
+
+
+@app.delete("/agents/{agent_id}/results/{request_id}")
+async def delete_agent_result(agent_id: str, request_id: str):
+    """
+    Delete a specific result for an agent.
+    """
+    agent_results = results_cache.get(agent_id, {})
+    if request_id in agent_results:
+        del agent_results[request_id]
+        return {"message": "Result deleted"}
+    else:
+        raise HTTPException(status_code=404, detail="Result not found")
+
+
+@app.post("/agent/{agent_id}/{module_name}")
 async def run_module(
         agent_id: str, 
         module_name: str, 
