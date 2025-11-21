@@ -11,7 +11,7 @@ from nats_observe.client import Client as NATSotel
 
 from nats.aio.msg import Msg
 
-from models import AgentHeartbeat, AgentInfo
+from models import AgentHeartbeat, AgentInfo, ModuleState
 
 from openapi_schema_validator import validate
 from jsonschema.exceptions import ValidationError
@@ -33,6 +33,8 @@ OTLP_LOGS_ENDPOINT = os.environ.get("OTLP_LOGS_ENDPOINT", "otel-collector:4317")
 agent_cache: Dict[str, AgentInfo] = {}
 # 📊 Results cache
 results_cache: Dict[str, Dict[str, Any]] = {}  # {agent_id: {request_id: result}}
+# 🆔 Request ID to module state mapping
+request_id_states_cache: Dict[str, ModuleState] = {}  # {request_id: ModuleState}
 settings = NATSotelSettings(
     service_name="server", 
     servers=NATS_URL,
@@ -60,6 +62,14 @@ async def nats_connect():
             if existing:
                 existing.last_seen = hb.timestamp
                 existing.alive = True
+                # Check if config has changed and resubscribe if needed
+                if existing.config != data:
+                    print(f"[Subscription] Agent {hb.agent_id} config updated, resubscribing to results...")
+                    try:
+                        await subscribe_to_agent_results(hb.agent_id)
+                        print(f"[Subscription] Successfully resubscribed to results for agent: {hb.agent_id}")
+                    except Exception as e:
+                        print(f"[Subscription] Error resubscribing to results for agent {hb.agent_id}: {e}")
                 existing.config = data
                 existing.total_heartbeats += 1
                 print(f"[Cache] Updated heartbeat: {hb.agent_id} @ {hb.timestamp}")
@@ -87,8 +97,36 @@ async def nats_connect():
         except Exception as e:
             print("[Cache] Error parsing heartbeat:", e)
 
+    async def module_state_handler(msg: Msg):
+        try:
+            data = json.loads(msg.data.decode())
+            agent_id = data["agent_id"]
+            module_name = data["module_name"]
+            state = data["state"]
+            request_id = data.get("request_id")  # Get request_id if available
+            
+            # Create module state object
+            module_state = ModuleState(
+                agent_id=agent_id,
+                module_name=module_name,
+                state=state,
+                error_message=data.get("error_message"),
+                details=data.get("details")
+            )
+            
+            # Store in cache by request ID if available
+            if request_id:
+                request_id_states_cache[request_id] = module_state
+            
+            print(f"[ModuleState] Updated state for {agent_id}.{module_name}: {state}")
+            if request_id:
+                print(f"[ModuleState] Also stored state for request_id: {request_id}")
+        except Exception as e:
+            print("[ModuleState] Error parsing module state:", e)
+
     await nc.subscribe(HEARTBEAT_SUBJECT, cb=heartbeat_handler)
-    print(f"[Cache] Subscribed to {HEARTBEAT_SUBJECT}")
+    await nc.subscribe("agent.module.state", cb=module_state_handler)
+    print(f"[Cache] Subscribed to {HEARTBEAT_SUBJECT} and agent.module.state")
     
     # Also subscribe to existing agents after a delay
     print("[Startup] Scheduling subscription to existing agents...")
@@ -118,14 +156,30 @@ async def subscribe_to_agent_results(agent_id: str):
         except Exception as e:
             print(f"[Results] Error handling result from agent {agent_id}: {e}")
     
-    # Subscribe to the agent's output topic
-    out_topic = f"agent.{agent_id}.out"
+    # Subscribe to the agent's generic output topic (for ping module)
+    generic_out_topic = f"agent.{agent_id}.out"
     try:
-        await nc.subscribe(out_topic, cb=result_handler)
-        print(f"[Results] Successfully subscribed to {out_topic}")
+        await nc.subscribe(generic_out_topic, cb=result_handler)
+        print(f"[Results] Successfully subscribed to {generic_out_topic}")
     except Exception as e:
-        print(f"[Results] Error subscribing to {out_topic}: {e}")
+        print(f"[Results] Error subscribing to {generic_out_topic}: {e}")
         raise
+    
+    # Subscribe to module-specific output topics (for echo and faulty modules)
+    # Get agent config to determine which modules exist
+    agent_info = agent_cache.get(agent_id)
+    if agent_info and agent_info.config and "agent" in agent_info.config and "modules" in agent_info.config["agent"]:
+        modules_spec = agent_info.config["agent"]["modules"].get("spec", {})
+        for module_name, module_config in modules_spec.items():
+            if "output_subject" in module_config:
+                module_out_topic = module_config["output_subject"]
+                # Only subscribe to module-specific topics (not the generic one we already subscribed to)
+                if module_out_topic != generic_out_topic:
+                    try:
+                        await nc.subscribe(module_out_topic, cb=result_handler)
+                        print(f"[Results] Successfully subscribed to {module_out_topic}")
+                    except Exception as e:
+                        print(f"[Results] Error subscribing to {module_out_topic}: {e}")
 
 
 # 🧹 Background cleanup task (mark dead)
@@ -136,7 +190,7 @@ async def cleanup_agents():
             if (now - info.last_seen) > timedelta(seconds=HEARTBEAT_TIMEOUT):
                 if info.alive:
                     info.alive = False
-                    print(f"[Cache] Agent {agent_id} marked DEAD (last seen {info.last_seen})")
+                    print(f"[Cache] Agent {agent_id} marked DEAD (last seen {info.last_seen}")
         await asyncio.sleep(HEARTBEAT_INTERVAL)
 
 
@@ -283,3 +337,47 @@ async def run_module(
         }
     except Exception as ex:
         return {"error": "..."}
+
+
+# ======================
+#    MODULE STATE ROUTES
+# ======================
+
+# @app.get("/agents/{agent_id}/modules")
+# async def get_agent_modules_states(agent_id: str):
+#     """
+#     Get all module states for a specific agent.
+#     """
+#     # Return empty dict since we're no longer tracking module states
+#     return {}
+
+
+# @app.get("/agents/{agent_id}/modules/{module_name}")
+# async def get_module_state(agent_id: str, module_name: str):
+#     """
+#     Get the state of a specific module for an agent.
+#     """
+#     # Return 404 since we're no longer tracking module states
+#     raise HTTPException(status_code=404, detail="Module state tracking disabled")
+
+
+@app.get("/modules/states")
+async def get_all_module_states():
+    """
+    Get all module states across all agents.
+    """
+    # Return empty dict since we're no longer tracking module states
+    return {}
+
+
+@app.get("/modules/states/{request_id}")
+async def get_module_state_by_request_id(request_id: str):
+    """
+    Get module state by request ID.
+    """
+    module_state = request_id_states_cache.get(request_id)
+    
+    if not module_state:
+        raise HTTPException(status_code=404, detail="Module state not found for this request ID")
+        
+    return module_state.dict()

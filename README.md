@@ -286,6 +286,49 @@ curl -s "http://localhost:8000/agents/{agent_id}/results/$REQUEST_ID" | jq .
 - Results are automatically captured when agents publish to their output topics
 - Results persist until manually deleted or the server restarts
 
+## 📊 Retrieving Module States
+
+The server tracks the execution state of each module request by request ID. You can monitor the progress and status of your requests using the state endpoints.
+
+### State API Endpoint
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `GET /modules/states/{request_id}` | GET | Get module state by request ID |
+
+### State Values
+- `started` - Module has been initialized
+- `running` - Module is actively processing the request
+- `completed` - Module has successfully finished processing
+- `error` - Module encountered an error during processing
+- `failed` - Module failed critically
+
+### Example Usage
+
+#### Track Echo Module State
+```bash
+# Trigger echo module with a specific request ID
+curl -X POST "http://localhost:8000/agent/{agent_id}/echo_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "test message", "id": "echo-test-123"}'
+
+# Check the state of the request
+curl -s "http://localhost:8000/modules/states/echo-test-123" | jq .
+```
+
+Example state response:
+```json
+{
+  "agent_id": "agent-123",
+  "module_name": "echo_module",
+  "state": "completed",
+  "timestamp": "2023-01-01T12:00:00Z",
+  "details": {
+    "action": "request_completed"
+  }
+}
+```
+
 #### 2. Trigger Ping Module
 ```bash
 # Trigger ping module on a specific agent
