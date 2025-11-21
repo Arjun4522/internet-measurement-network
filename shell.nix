@@ -17,6 +17,8 @@ pkgs.mkShell {
     zlib
     libffi
     openssl
+    go
+    protobuf
   ];
   
   shellHook = ''
@@ -39,6 +41,6 @@ pkgs.mkShell {
     echo "nats-server -n newton -m 8222 -DVV"
     echo ""
     echo "To start an agent, run:"
-    echo "python -m aiori_agent start"
+    echo "python -m aiori_agent"
   '';
 }

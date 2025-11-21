@@ -176,68 +176,210 @@ This means:
    python -m agent start
    ```
 
-## 🧪 Testing Commands
+## 🧪 Comprehensive Testing Guide
 
-### Check OpenSearch Indices
+### Prerequisites
+Before testing, ensure all services are running:
 ```bash
-# Check what indices were created in OpenSearch
-curl -s "http://localhost:9200/_cat/indices?v" | grep -E "ss4o|otel|traces|logs|metrics"
+# Start the complete system
+docker-compose up -d
 
-# Check document counts in the trace indices
-curl -s "http://localhost:9200/otel-spans-*/_count"
-curl -s "http://localhost:9200/otel-v1-apm-span*/_count"
+# Wait for services to initialize (30-60 seconds)
+sleep 30
 
-# Check if logs and metrics indices exist
-curl -s "http://localhost:9200/ss4o_logs-*/_count"
-curl -s "http://localhost:9200/ss4o_metrics-*/_count"
+# Verify services are running
+docker-compose ps
 ```
 
-### Check Data Prepper Logs
+### 1. Verify System Health
+
+#### Check Server Status
 ```bash
-# Check for received data in Data Prepper logs
-docker logs internet-measurement-network-data-prepper-1 | grep -i "received\|processing\|records\|events" | tail -n 20
+# Check if server is responsive
+curl -s localhost:8000/ | jq .
+
+# Expected response:
+# {
+#   "status": "ok",
+#   "total_agents": 2,
+#   "alive_agents": 2
+# }
 ```
 
-### Trigger Modules and View Traces
-
-#### 1. Get Alive Agents
+#### List Available Agents
 ```bash
 # Get list of alive agents and their IDs
 curl -s localhost:8000/agents/alive | jq 'keys[]'
+
+# Example output:
+# "a4cd3d41-d26d-40fb-874d-347561fe8ef3"
+# "e36bfca1-6607-414b-b52e-1c3b231bd71c"
 ```
 
-#### 2. Trigger Ping Module
+### 2. Module Testing Procedures
+
+#### Ping Module (Network Connectivity Testing)
 ```bash
-# Trigger ping module on a specific agent
-curl -X POST "http://localhost:8000/agent/{agent_id}/ping_module" \
+# Trigger ping module
+AGENT_ID="a4cd3d41-d26d-40fb-874d-347561fe8ef3"
+curl -X POST "http://localhost:8000/agent/$AGENT_ID/ping_module" \
 -H "Content-Type: application/json" \
 -d '{"host": "8.8.8.8", "count": 4}'
+
+# Check result and state
+REQUEST_ID=$(curl -s -X POST "http://localhost:8000/agent/$AGENT_ID/ping_module" \
+-H "Content-Type: application/json" \
+-d '{"host": "8.8.8.8", "count": 4}' | jq -r '.id')
+
+# Retrieve detailed results
+curl -s "http://localhost:8000/agents/$AGENT_ID/results/$REQUEST_ID" | jq .
+
+# Monitor execution state
+curl -s "http://localhost:8000/modules/states/$REQUEST_ID" | jq .
+
+# Expected result format:
+# {
+#   "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+#   "address": "8.8.8.8",
+#   "rtts": [12.34, 11.56, 13.78, 12.91],
+#   "packets_received": 4,
+#   "packets_sent": 4
+# }
 ```
 
-#### 3. Trigger Echo Module
+#### Echo Module (Message Testing)
 ```bash
-# Trigger echo module on a specific agent
-curl -X POST "http://localhost:8000/agent/{agent_id}/echo_module" \
+# Trigger echo module
+AGENT_ID="a4cd3d41-d26d-40fb-874d-347561fe8ef3"
+curl -X POST "http://localhost:8000/agent/$AGENT_ID/echo_module" \
 -H "Content-Type: application/json" \
--d '{"message": "test message"}'
+-d '{"message": "Hello World Test"}'
+
+# Check result and state
+REQUEST_ID=$(curl -s -X POST "http://localhost:8000/agent/$AGENT_ID/echo_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Hello World Test"}' | jq -r '.id')
+
+# Retrieve detailed results
+curl -s "http://localhost:8000/agents/$AGENT_ID/results/$REQUEST_ID" | jq .
+
+# Monitor execution state
+curl -s "http://localhost:8000/modules/states/$REQUEST_ID" | jq .
+
+# Expected result format:
+# {
+#   "message": "Hello World Test",
+#   "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+#   "processed_at": 1234567890.123,
+#   "from_module": "working_module"
+# }
 ```
 
-#### 4. View Traces in OpenSearch
+#### Faulty Module (Error Handling Testing)
 ```bash
-# View recent traces (organized by agent-specific subjects)
-curl -s -X POST "localhost:9200/otel-v1-apm-span-*/_search" \
+# Normal operation test
+AGENT_ID="a4cd3d41-d26d-40fb-874d-347561fe8ef3"
+curl -X POST "http://localhost:8000/agent/$AGENT_ID/faulty_module" \
 -H "Content-Type: application/json" \
--d '{"size": 10, "sort": [{"startTime": {"order": "desc"}}]}' \
-| jq '.hits.hits[]._source | {name, serviceName, traceId, traceGroup, startTime}'
+-d '{"message": "Normal Test"}'
 
-# Search for specific agent traces
-curl -s -X POST "localhost:9200/otel-v1-apm-span-*/_search" \
+# Check successful execution
+REQUEST_ID=$(curl -s -X POST "http://localhost:8000/agent/$AGENT_ID/faulty_module" \
 -H "Content-Type: application/json" \
--d '{"size": 10, "query": {"wildcard": {"name": "*{agent_id}*"}}}' \
-| jq '.hits.hits[]._source | {name, serviceName, traceId, traceGroup, startTime}'
+-d '{"message": "Normal Test"}' | jq -r '.id')
 
-# View service maps
-curl -s localhost:9200/otel-v1-apm-service-map/_search?pretty
+curl -s "http://localhost:8000/agents/$AGENT_ID/results/$REQUEST_ID" | jq .
+curl -s "http://localhost:8000/modules/states/$REQUEST_ID" | jq .
+
+# Delay simulation test
+REQUEST_ID_DELAY=$(curl -s -X POST "http://localhost:8000/agent/$AGENT_ID/faulty_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Delay Test", "delay": 3}' | jq -r '.id')
+
+# Check state during processing
+curl -s "http://localhost:8000/modules/states/$REQUEST_ID_DELAY" | jq .
+
+# Error simulation test
+REQUEST_ID_ERROR=$(curl -s -X POST "http://localhost:8000/agent/$AGENT_ID/faulty_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Error Test", "crash": true}' | jq -r '.id')
+
+# Check error state
+curl -s "http://localhost:8000/modules/states/$REQUEST_ID_ERROR" | jq .
+
+# Expected error state:
+# {
+#   "agent_id": "a4cd3d41-d26d-40fb-874d-347561fe8ef3",
+#   "module_name": "faulty_module",
+#   "state": "error",
+#   "timestamp": "2023-01-01T12:00:00Z",
+#   "error_message": "Intentional crash triggered.",
+#   "details": {
+#     "action": "request_failed"
+#   }
+# }
+```
+
+### 3. Advanced Testing Scenarios
+
+#### Bulk Testing Script
+```bash
+#!/bin/bash
+# bulk_test.sh - Test multiple modules sequentially
+
+AGENT_ID="a4cd3d41-d26d-40fb-874d-347561fe8ef3"
+
+echo "=== Bulk Module Testing ==="
+
+# Test 1: Ping Module
+echo "Testing Ping Module..."
+PING_ID=$(curl -s -X POST "http://localhost:8000/agent/$AGENT_ID/ping_module" \
+-H "Content-Type: application/json" \
+-d '{"host": "1.1.1.1", "count": 3}' | jq -r '.id')
+sleep 2
+curl -s "http://localhost:8000/modules/states/$PING_ID" | jq '.state'
+
+# Test 2: Echo Module
+echo "Testing Echo Module..."
+ECHO_ID=$(curl -s -X POST "http://localhost:8000/agent/$AGENT_ID/echo_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Bulk Test"}' | jq -r '.id')
+sleep 1
+curl -s "http://localhost:8000/modules/states/$ECHO_ID" | jq '.state'
+
+# Test 3: Faulty Module
+echo "Testing Faulty Module..."
+FAULTY_ID=$(curl -s -X POST "http://localhost:8000/agent/$AGENT_ID/faulty_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Bulk Test"}' | jq -r '.id')
+sleep 1
+curl -s "http://localhost:8000/modules/states/$FAULTY_ID" | jq '.state'
+
+echo "=== Test Results ==="
+echo "Ping: $(curl -s "http://localhost:8000/modules/states/$PING_ID" | jq -r '.state')"
+echo "Echo: $(curl -s "http://localhost:8000/modules/states/$ECHO_ID" | jq -r '.state')"
+echo "Faulty: $(curl -s "http://localhost:8000/modules/states/$FAULTY_ID" | jq -r '.state')"
+```
+
+#### Concurrent Testing
+```bash
+# Test multiple modules simultaneously
+AGENT_ID="a4cd3d41-d26d-40fb-874d-347561fe8ef3"
+
+# Start all tests concurrently
+curl -X POST "http://localhost:8000/agent/$AGENT_ID/ping_module" \
+-H "Content-Type: application/json" \
+-d '{"host": "8.8.8.8", "count": 2}' &
+
+curl -X POST "http://localhost:8000/agent/$AGENT_ID/echo_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Concurrent Test"}' &
+
+curl -X POST "http://localhost:8000/agent/$AGENT_ID/faulty_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Concurrent Test"}' &
+
+wait  # Wait for all background jobs to complete
 ```
 
 ## 📥 Retrieving Module Results
