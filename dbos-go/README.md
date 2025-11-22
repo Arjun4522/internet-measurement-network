@@ -30,25 +30,21 @@ Python Server ←→ gRPC ←→ DBOS Service ←→ Redis
 ### Agent Management
 - RegisterAgent
 - GetAgent
-- UpdateAgentStatus
 - ListAgents
 
 ### Module State Management
 - SetModuleState
 - GetModuleState
-- UpdateModuleState
 - ListModuleStates
 
 ### Measurement Results
 - StoreResult
 - GetResult
 - ListResults
-- DeleteResult
 
 ### Task Scheduling
 - ScheduleTask
 - GetTask
-- UpdateTaskStatus
 - ListDueTasks
 
 ## Setup
@@ -59,22 +55,23 @@ Python Server ←→ gRPC ←→ DBOS Service ←→ Redis
    go mod tidy
    ```
 
-2. Generate protobuf code for Go:
-   ```bash
-   cd dbos-go
-   protoc --go_out=. --go-grpc_out=. api/dbos.proto
-   ```
-
-3. Install Redis (using Docker):
+2. Install Redis (using Docker):
    ```bash
    docker run -d --name redis-dbos -p 6379:6379 redis:latest
    ```
 
-4. Start the DBOS server:
+3. Start the DBOS server:
    ```bash
    cd dbos-go
-   go run cmd/main.go
+   REDIS_ADDR=localhost:6379 PORT=50051 go run cmd/main.go
    ```
+
+The DBOS service will start on port 50051 and connect to Redis at localhost:6379.
+
+## Environment Variables
+
+- `REDIS_ADDR` - Redis address (default: "localhost:6379")
+- `PORT` - Server port (default: "50051")
 
 ## Testing
 
@@ -86,22 +83,47 @@ To test the DBOS service with a standalone gRPC client:
    go run test/grpc_client.go
    ```
 
+This will run a series of tests including:
+- Registering a test agent
+- Getting agent information
+- Setting and getting module states
+- Storing and retrieving measurement results
+- Listing all agents
+
 2. Clean up:
    ```bash
    pkill -f "dbos-go/cmd/main.go"
    docker stop redis-dbos && docker rm redis-dbos
    ```
 
-## Future Integration with IMN Python Server
+## Integration with IMN Python Server
 
-TODO:
-1. Replace in-memory agent cache with DBOS gRPC client calls
-2. Replace in-memory results cache with persistent storage via DBOS
-3. Replace in-memory module state tracking with DBOS state management
-4. Add DBOS client initialization in server startup
-5. Update API endpoints to use DBOS for agent management
-6. Update NATS handlers to store state changes in DBOS
-7. Add error handling and fallback mechanisms for DBOS connectivity
-8. Add configuration options for DBOS service address
-9. Implement connection pooling for gRPC client
-10. Add metrics and monitoring for DBOS integration
+The DBOS service is now integrated with the IMN Python server. To enable DBOS integration:
+
+1. Set environment variables in the Python server:
+   ```bash
+   export USE_DBOS=true
+   export DBOS_ADDRESS=localhost:50051
+   ```
+
+2. Install Python gRPC dependencies:
+   ```bash
+   pip install grpcio grpcio-tools
+   ```
+
+3. Generate Python gRPC client code:
+   ```bash
+   python -m grpc_tools.protoc -I./dbos-go/api --python_out=./server --grpc_python_out=./server ./dbos-go/api/dbos.proto
+   ```
+
+4. Start the Python server:
+   ```bash
+   cd server
+   python -m fastapi run main.py
+   ```
+
+When enabled, the Python server will:
+- Register agents with DBOS on heartbeat
+- Store module states in DBOS
+- Store measurement results in DBOS
+- Retrieve data from DBOS when available, with in-memory cache as fallback

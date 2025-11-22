@@ -29,12 +29,15 @@ OTLP_METRICS_ENDPOINT = os.environ.get("OTLP_METRICS_ENDPOINT", "otel-collector:
 OTLP_LOGS_ENDPOINT = os.environ.get("OTLP_LOGS_ENDPOINT", "otel-collector:4317")
 # ============================
 
-# 🧠 In-memory cache
+# 🧠 In-memory cache (fallback when DBOS is unavailable)
 agent_cache: Dict[str, AgentInfo] = {}
-# 📊 Results cache
+# 📊 Results cache (fallback when DBOS is unavailable)
 results_cache: Dict[str, Dict[str, Any]] = {}  # {agent_id: {request_id: result}}
-# 🆔 Request ID to module state mapping
+# 🆔 Request ID to module state mapping (fallback when DBOS is unavailable)
 request_id_states_cache: Dict[str, ModuleState] = {}  # {request_id: ModuleState}
+
+# DBOS client
+from dbos_client import dbos_client, initialize_dbos_client, shutdown_dbos_client
 settings = NATSotelSettings(
     service_name="server", 
     servers=NATS_URL,
@@ -59,6 +62,30 @@ async def nats_connect():
             existing = agent_cache.get(hb.agent_id)
             now = datetime.now(timezone.utc)
 
+            # Create agent info object
+            agent_info = AgentInfo(
+                agent_id=hb.agent_id,
+                alive=True,
+                hostname=hb.hostname,
+                last_seen=hb.timestamp,
+                config=data,
+                first_seen=now if not existing else existing.first_seen,
+                total_heartbeats=(existing.total_heartbeats + 1) if existing else 1
+            )
+
+            # Register/update agent in DBOS if enabled
+            if os.environ.get("USE_DBOS", "false").lower() == "true":
+                try:
+                    from dbos_client import dbos_client
+                    if dbos_client:
+                        success = await dbos_client.register_agent(agent_info)
+                        if success:
+                            print(f"[DBOS] Registered agent: {hb.agent_id}")
+                        else:
+                            print(f"[DBOS] Failed to register agent: {hb.agent_id}")
+                except Exception as e:
+                    print(f"[DBOS] Error registering agent {hb.agent_id}: {e}")
+
             if existing:
                 existing.last_seen = hb.timestamp
                 existing.alive = True
@@ -74,15 +101,7 @@ async def nats_connect():
                 existing.total_heartbeats += 1
                 print(f"[Cache] Updated heartbeat: {hb.agent_id} @ {hb.timestamp}")
             else:
-                agent_cache[hb.agent_id] = AgentInfo(
-                    agent_id=hb.agent_id,
-                    alive=True,
-                    hostname=hb.hostname,
-                    last_seen=hb.timestamp,
-                    config=data,
-                    first_seen=now,
-                    total_heartbeats=1
-                )
+                agent_cache[hb.agent_id] = agent_info
                 
                 # Subscribe to result topics for this new agent
                 print(f"[Subscription] New agent detected: {hb.agent_id}, subscribing to results...")
@@ -113,6 +132,21 @@ async def nats_connect():
                 error_message=data.get("error_message"),
                 details=data.get("details")
             )
+            
+            # Store in DBOS if enabled
+            if os.environ.get("USE_DBOS", "false").lower() == "true":
+                try:
+                    from dbos_client import dbos_client
+                    if dbos_client:
+                        # Add request_id to module_state for DBOS storage
+                        setattr(module_state, 'request_id', request_id or '')
+                        success = await dbos_client.set_module_state(module_state)
+                        if success:
+                            print(f"[DBOS] Stored module state for {agent_id}.{module_name}")
+                        else:
+                            print(f"[DBOS] Failed to store module state for {agent_id}.{module_name}")
+                except Exception as e:
+                    print(f"[DBOS] Error storing module state for {agent_id}.{module_name}: {e}")
             
             # Store in cache by request ID if available
             if request_id:
@@ -145,6 +179,21 @@ async def subscribe_to_agent_results(agent_id: str):
             request_id = data.get("id")
             
             if request_id:
+                # Store result in DBOS if enabled
+                if os.environ.get("USE_DBOS", "false").lower() == "true":
+                    try:
+                        from dbos_client import dbos_client
+                        if dbos_client:
+                            # Convert data to JSON bytes for DBOS storage
+                            result_data = json.dumps(data).encode('utf-8')
+                            success = await dbos_client.store_result(agent_id, request_id, "unknown", result_data)
+                            if success:
+                                print(f"[DBOS] Stored result for agent {agent_id}, request {request_id}")
+                            else:
+                                print(f"[DBOS] Failed to store result for agent {agent_id}, request {request_id}")
+                    except Exception as e:
+                        print(f"[DBOS] Error storing result for agent {agent_id}, request {request_id}: {e}")
+                
                 # Store result in cache
                 if agent_id not in results_cache:
                     results_cache[agent_id] = {}
@@ -197,8 +246,31 @@ async def cleanup_agents():
 # 🔌 Startup
 @app.on_event("startup")
 async def startup_event():
+    # Initialize DBOS client if enabled
+    if os.environ.get("USE_DBOS", "false").lower() == "true":
+        try:
+            from dbos_client import initialize_dbos_client
+            await initialize_dbos_client()
+            print("DBOS integration enabled")
+        except Exception as e:
+            print(f"Failed to initialize DBOS client: {e}")
+    else:
+        print("DBOS integration disabled")
+        
     asyncio.create_task(nats_connect())
     asyncio.create_task(cleanup_agents())
+
+# 🔌 Shutdown
+@app.on_event("shutdown")
+async def shutdown_event():
+    # Shutdown DBOS client if enabled
+    if os.environ.get("USE_DBOS", "false").lower() == "true":
+        try:
+            from dbos_client import shutdown_dbos_client
+            await shutdown_dbos_client()
+            print("DBOS client shutdown")
+        except Exception as e:
+            print(f"Error shutting down DBOS client: {e}")
     
     
 async def subscribe_existing_agents():
@@ -260,6 +332,18 @@ async def get_agent(agent_id: str):
     """
     Get detailed info about a specific agent.
     """
+    # Try to get from DBOS if enabled
+    if os.environ.get("USE_DBOS", "false").lower() == "true":
+        try:
+            from dbos_client import dbos_client
+            if dbos_client:
+                dbos_agent = await dbos_client.get_agent(agent_id)
+                if dbos_agent:
+                    return dbos_agent
+        except Exception as e:
+            print(f"[DBOS] Error getting agent {agent_id}: {e}")
+    
+    # Fallback to cache
     agent = agent_cache.get(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -271,6 +355,23 @@ async def get_agent_result(agent_id: str, request_id: str):
     """
     Get result for a specific agent and request ID.
     """
+    # Try to get from DBOS if enabled
+    if os.environ.get("USE_DBOS", "false").lower() == "true":
+        try:
+            from dbos_client import dbos_client
+            if dbos_client:
+                result_data = await dbos_client.get_result(agent_id, request_id)
+                if result_data:
+                    # Convert bytes back to JSON
+                    try:
+                        result = json.loads(result_data.decode('utf-8'))
+                        return result
+                    except Exception as e:
+                        print(f"[DBOS] Error decoding result for agent {agent_id}, request {request_id}: {e}")
+        except Exception as e:
+            print(f"[DBOS] Error getting result for agent {agent_id}, request {request_id}: {e}")
+    
+    # Fallback to cache
     agent_results = results_cache.get(agent_id, {})
     result = agent_results.get(request_id)
     
@@ -375,6 +476,18 @@ async def get_module_state_by_request_id(request_id: str):
     """
     Get module state by request ID.
     """
+    # Try to get from DBOS if enabled
+    if os.environ.get("USE_DBOS", "false").lower() == "true":
+        try:
+            from dbos_client import dbos_client
+            if dbos_client:
+                dbos_state = await dbos_client.get_module_state(request_id)
+                if dbos_state:
+                    return dbos_state
+        except Exception as e:
+            print(f"[DBOS] Error getting module state for request {request_id}: {e}")
+    
+    # Fallback to cache
     module_state = request_id_states_cache.get(request_id)
     
     if not module_state:

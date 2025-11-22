@@ -170,7 +170,13 @@ __agent_data__/
 # Experimentation
 .*
 
+# DBOS Go generated files
+dbos-go/api/*.pb.go
+
 # Logs
 crash_state.json
 .errors
 .messages
+
+# DBOS Python client generated files
+dbos_client/*pb2*.py

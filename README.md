@@ -662,6 +662,119 @@ During investigation, it was discovered that:
 
 The main limitation is organizational - traces are searchable but not intuitively organized by module type, making it difficult to find specific module executions without knowing the agent-specific subject names.
 
+## 🔄 DBOS - Distributed Business Operating System
+
+A new Go-based microservice has been developed to handle persistent storage and state management for the Internet Measurement Network system. The DBOS service provides:
+
+### Features
+- **Runtime State Management** - Agents, requests, module states
+- **Network Measurement Results Storage** - Persistent storage of measurement data
+- **Control-Plane Coordination** - Scheduling, task management, and coordination
+- **High Performance** - Built with Go and Redis for fast, reliable persistence
+- **gRPC Interface** - Clean API for Python server integration
+
+### Architecture
+```
+Python Server ←→ gRPC ←→ DBOS Service ←→ Redis
+```
+
+### Components
+- **gRPC Server** - Exposes APIs for Python server to interact with
+- **State Manager** - Handles agent and module state transitions
+- **Result Store** - Manages storage and retrieval of measurement results
+- **Scheduler** - Handles task scheduling and coordination
+- **Redis Client** - Connects to Redis for persistent storage
+
+### API Endpoints
+#### Agent Management
+- RegisterAgent
+- GetAgent
+- ListAgents
+
+#### Module State Management
+- SetModuleState
+- GetModuleState
+- ListModuleStates
+
+#### Measurement Results
+- StoreResult
+- GetResult
+- ListResults
+
+#### Task Scheduling
+- ScheduleTask
+- GetTask
+- ListDueTasks
+
+### Integration Plan
+The DBOS service is designed to replace the in-memory caches currently used by the Python server with persistent storage. The integration will involve:
+
+1. Replacing in-memory agent cache with DBOS gRPC client calls
+2. Replacing in-memory results cache with persistent storage via DBOS
+3. Replacing in-memory module state tracking with DBOS state management
+4. Adding DBOS client initialization in server startup
+5. Updating API endpoints to use DBOS for agent management
+6. Updating NATS handlers to store state changes in DBOS
+7. Adding error handling and fallback mechanisms for DBOS connectivity
+8. Adding configuration options for DBOS service address
+9. Implementing connection pooling for gRPC client
+10. Adding metrics and monitoring for DBOS integration
+
+### Setup
+1. Install Go dependencies:
+   ```bash
+   cd dbos-go
+   go mod tidy
+   ```
+
+2. Generate protobuf code for Go (if needed):
+   ```bash
+   cd dbos-go
+   protoc --go_out=. --go-grpc_out=. api/dbos.proto
+   ```
+
+3. Install Redis (using Docker):
+   ```bash
+   docker run -d --name redis-dbos -p 6379:6379 redis:latest
+   ```
+
+4. Start the DBOS server:
+   ```bash
+   cd dbos-go
+   go run cmd/main.go
+   ```
+
+5. Install Python gRPC dependencies:
+   ```bash
+   pip install grpcio grpcio-tools
+   ```
+
+6. Generate Python gRPC client code:
+   ```bash
+   python -m grpc_tools.protoc -I./dbos-go/api --python_out=./server --grpc_python_out=./server ./dbos-go/api/dbos.proto
+   ```
+
+7. Configure the Python server to connect to DBOS by setting the appropriate environment variables:
+   ```bash
+   export USE_DBOS=true
+   export DBOS_ADDRESS=localhost:50051
+   ```
+
+### Testing DBOS Integration
+To test the DBOS integration:
+
+1. Start Redis and DBOS service as shown above
+2. Run the integration test script:
+   ```bash
+   python test_dbos_integration.py
+   ```
+
+3. Or test with the gRPC client:
+   ```bash
+   cd dbos-go
+   go run test/grpc_client.go
+   ```
+
 ## 🚀 Next Steps
 
 To improve the observability experience:
@@ -670,3 +783,44 @@ To improve the observability experience:
 2. **Enhance trace attributes** - Add more metadata to make traces more informative
 3. **Improve service map generation** - Create more meaningful service relationships based on module interactions
 4. **Add module-specific dashboards** - Create OpenSearch Dashboards visualizations for each module type
+
+## 🔮 Future Work
+
+### DBOS Integration
+Complete the integration of the DBOS service with the Python server to enable persistent storage and improved state management:
+
+1. Implement the DBOS gRPC client in the Python server
+2. Replace in-memory data structures with DBOS service calls
+3. Add comprehensive error handling and fallback mechanisms
+4. Implement connection pooling for improved performance
+5. Add monitoring and metrics for DBOS integration
+
+### Enhanced Module System
+1. **Dynamic Module Loading** - Enable agents to load/unload modules without restart
+2. **Module Versioning** - Support multiple versions of the same module
+3. **Module Dependencies** - Allow modules to declare and manage dependencies
+4. **Module Configuration** - Provide standardized configuration mechanisms
+
+### Advanced Scheduling
+1. **Cron-like Scheduling** - Support recurring measurement tasks
+2. **Conditional Execution** - Execute tasks based on previous results
+3. **Load Balancing** - Distribute tasks across multiple agents
+4. **Priority Queuing** - Prioritize critical measurements
+
+### Improved Security
+1. **Authentication** - Add authentication for agent registration
+2. **Authorization** - Control which agents can execute which modules
+3. **Encryption** - Encrypt sensitive data in transit and at rest
+4. **Audit Logging** - Track all system activities for compliance
+
+### Enhanced Observability
+1. **Custom Metrics** - Allow modules to define custom metrics
+2. **Alerting** - Implement alerting based on measurement results
+3. **Anomaly Detection** - Automatically detect unusual network behavior
+4. **Historical Analysis** - Enable trend analysis over time
+
+### Scalability Improvements
+1. **Sharding** - Distribute agents across multiple servers
+2. **Clustering** - Enable multiple server instances for redundancy
+3. **Streaming** - Support real-time streaming of measurement results
+4. **Batch Processing** - Optimize for high-volume measurements
