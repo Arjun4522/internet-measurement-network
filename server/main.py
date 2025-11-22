@@ -124,6 +124,17 @@ async def nats_connect():
             state = data["state"]
             request_id = data.get("request_id")  # Get request_id if available
             
+            # Extract trace context if present
+            trace_context = data.pop('_trace_context', None)
+            if trace_context:
+                try:
+                    from opentelemetry.propagate import extract
+                    # Extract trace context to continue the trace
+                    context = extract(trace_context)
+                    # Set the current context (this would normally be done with a span)
+                except Exception as e:
+                    print(f"Warning: Could not extract trace context: {e}")
+            
             # Create module state object
             module_state = ModuleState(
                 agent_id=agent_id,
@@ -177,6 +188,17 @@ async def subscribe_to_agent_results(agent_id: str):
             print(f"[Results] Received message on result topic for agent {agent_id}")
             data = json.loads(msg.data.decode())
             request_id = data.get("id")
+            
+            # Extract trace context if present
+            trace_context = data.pop('_trace_context', None)
+            if trace_context:
+                try:
+                    from opentelemetry.propagate import extract
+                    # Extract trace context to continue the trace
+                    context = extract(trace_context)
+                    # Set the current context (this would normally be done with a span)
+                except Exception as e:
+                    print(f"Warning: Could not extract trace context: {e}")
             
             if request_id:
                 # Store result in DBOS if enabled
@@ -430,6 +452,16 @@ async def run_module(
             except Exception as ex:
                 return {"error": "Unknown Error", "message": str(ex)}
 
+            # Add trace context to the message
+            trace_data = {}
+            try:
+                from opentelemetry.propagate import inject
+                inject(trace_data)
+                # Add trace context to the module request
+                module_request['_trace_context'] = trace_data
+            except Exception as e:
+                print(f"Warning: Could not inject trace context: {e}")
+            
             await nc.publish(all_spec[module_name]['input_subject'], json.dumps(module_request).encode())
 
         return {

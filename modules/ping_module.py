@@ -75,6 +75,17 @@ class PingModule(BaseWorker):
 
             data = json.loads(msg.data.decode())
             request_id = data.get("id")  # Extract request ID for state tracking
+            
+            # Extract trace context if present
+            trace_context = data.pop('_trace_context', None)
+            if trace_context:
+                try:
+                    from opentelemetry.propagate import extract
+                    # Extract trace context to continue the trace
+                    context = extract(trace_context)
+                    # Set the current context (this would normally be done with a span)
+                except Exception as e:
+                    self.logger.debug(f"Could not extract trace context: {e}")
 
             query = PingQuery(**data)
             model_type = PingQuery.model_type()

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"log"
 	"net"
 	"time"
 
@@ -9,6 +10,13 @@ import (
 	"github.com/internet-measurement-network/dbos/internal/models"
 	"github.com/internet-measurement-network/dbos/internal/store"
 	"github.com/internet-measurement-network/dbos/pkg/redis"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
 	"google.golang.org/grpc"
 )
 
@@ -21,8 +29,11 @@ type Server struct {
 	taskStore        *store.TaskStore
 }
 
-// NewServer creates a new DBOS server
+// NewServer creates a new DBOS server with OpenTelemetry instrumentation
 func NewServer(redisAddr string) *Server {
+	// Initialize OpenTelemetry
+	initTracer()
+
 	// Create Redis client
 	redisClient := redis.NewClient(redisAddr)
 
@@ -40,14 +51,59 @@ func NewServer(redisAddr string) *Server {
 	}
 }
 
-// Start starts the gRPC server
+// initTracer initializes the OpenTelemetry tracer
+func initTracer() {
+	ctx := context.Background()
+
+	// Create the OTLP exporter
+	exporter, err := otlptracegrpc.New(ctx,
+		otlptracegrpc.WithEndpoint("otel-collector:4317"),
+		otlptracegrpc.WithInsecure(),
+	)
+	if err != nil {
+		log.Printf("Warning: Failed to create OTLP exporter: %v", err)
+		return
+	}
+
+	// Create resource with service name
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceName("dbos"),
+		),
+	)
+	if err != nil {
+		log.Printf("Warning: Failed to create resource: %v", err)
+		return
+	}
+
+	// Create trace provider
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(res),
+	)
+
+	// Set global tracer provider
+	otel.SetTracerProvider(tp)
+
+	// Set propagator
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+
+	log.Println("OpenTelemetry tracer initialized")
+}
+
+// Start starts the gRPC server with OpenTelemetry instrumentation
 func (s *Server) Start(port string) error {
 	lis, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		return err
 	}
 
-	grpcServer := grpc.NewServer()
+	// Create gRPC server with OpenTelemetry interceptor
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(otelgrpc.UnaryServerInterceptor()),
+		grpc.StreamInterceptor(otelgrpc.StreamServerInterceptor()),
+	)
+
 	api.RegisterDBOSServer(grpcServer, s)
 
 	return grpcServer.Serve(lis)

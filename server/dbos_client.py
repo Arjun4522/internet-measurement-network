@@ -8,11 +8,36 @@ import os
 import dbos_pb2
 import dbos_pb2_grpc
 
+# Import OpenTelemetry for trace context propagation
+OTEL_AVAILABLE = True
+try:
+    from opentelemetry.propagate import inject
+except:
+    OTEL_AVAILABLE = False
+
+# Check if OpenTelemetry is available
+try:
+    import opentelemetry
+    OTEL_AVAILABLE = True
+except ImportError:
+    OTEL_AVAILABLE = False
+
+# Import OpenTelemetry
+from opentelemetry import trace
+from opentelemetry.instrumentation.grpc import GrpcAioInstrumentorClient
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.semconv.resource import ResourceAttributes
+
 class DBOSClient:
     def __init__(self, dbos_address: str = "localhost:50051"):
         self.dbos_address = dbos_address
         self.channel = None
         self.stub = None
+        # Initialize OpenTelemetry tracer
+        self.tracer = trace.get_tracer(__name__)
         
     async def connect(self):
         """Establish connection to DBOS service"""
@@ -34,18 +59,30 @@ class DBOSClient:
             
         try:
             # Convert AgentInfo to DBOS Agent protobuf message
+            # Convert config values to strings to match protobuf map<string, string> type
+            config_str_values = {k: str(v) for k, v in agent_info.config.items()}
+            
             agent_proto = dbos_pb2.Agent(
                 id=agent_info.agent_id,
                 hostname=agent_info.hostname,
                 alive=agent_info.alive,
                 last_seen=int(agent_info.last_seen.timestamp()),
                 first_seen=int(agent_info.first_seen.timestamp()),
-                config=agent_info.config,
+                config=config_str_values,
                 total_heartbeats=agent_info.total_heartbeats
             )
             
             request = dbos_pb2.RegisterAgentRequest(agent=agent_proto)
-            response = await self.stub.RegisterAgent(request)
+            # Add trace context propagation
+            metadata = []
+            if OTEL_AVAILABLE:
+                try:
+                    from opentelemetry.propagate import inject
+                    inject(metadata)
+                except:
+                    pass  # Ignore tracing errors
+            
+            response = await self.stub.RegisterAgent(request, metadata=metadata)
             return response.success
         except Exception as e:
             print(f"Error registering agent with DBOS: {e}")
@@ -58,7 +95,16 @@ class DBOSClient:
             
         try:
             request = dbos_pb2.GetAgentRequest(agent_id=agent_id)
-            response = await self.stub.GetAgent(request)
+            # Add trace context propagation
+            metadata = []
+            if OTEL_AVAILABLE:
+                try:
+                    from opentelemetry.propagate import inject
+                    inject(metadata)
+                except:
+                    pass  # Ignore tracing errors
+            
+            response = await self.stub.GetAgent(request, metadata=metadata)
             
             if response.found:
                 agent_proto = response.agent
@@ -84,7 +130,16 @@ class DBOSClient:
             
         try:
             request = dbos_pb2.ListAgentsRequest()
-            response = await self.stub.ListAgents(request)
+            # Add trace context propagation
+            metadata = []
+            if OTEL_AVAILABLE:
+                try:
+                    from opentelemetry.propagate import inject
+                    inject(metadata)
+                except:
+                    pass  # Ignore tracing errors
+            
+            response = await self.stub.ListAgents(request, metadata=metadata)
             
             agents = []
             for agent_proto in response.agents:
@@ -120,7 +175,16 @@ class DBOSClient:
             )
             
             request = dbos_pb2.SetModuleStateRequest(state=state_proto)
-            response = await self.stub.SetModuleState(request)
+            # Add trace context propagation
+            metadata = []
+            if OTEL_AVAILABLE:
+                try:
+                    from opentelemetry.propagate import inject
+                    inject(metadata)
+                except:
+                    pass  # Ignore tracing errors
+            
+            response = await self.stub.SetModuleState(request, metadata=metadata)
             return response.success
         except Exception as e:
             print(f"Error setting module state in DBOS: {e}")
@@ -133,7 +197,16 @@ class DBOSClient:
             
         try:
             request = dbos_pb2.GetModuleStateRequest(request_id=request_id)
-            response = await self.stub.GetModuleState(request)
+            # Add trace context propagation
+            metadata = []
+            if OTEL_AVAILABLE:
+                try:
+                    from opentelemetry.propagate import inject
+                    inject(metadata)
+                except:
+                    pass  # Ignore tracing errors
+            
+            response = await self.stub.GetModuleState(request, metadata=metadata)
             
             if response.found:
                 state_proto = response.state
@@ -166,7 +239,16 @@ class DBOSClient:
             )
             
             request = dbos_pb2.StoreResultRequest(result=result_proto)
-            response = await self.stub.StoreResult(request)
+            # Add trace context propagation
+            metadata = []
+            if OTEL_AVAILABLE:
+                try:
+                    from opentelemetry.propagate import inject
+                    inject(metadata)
+                except:
+                    pass  # Ignore tracing errors
+            
+            response = await self.stub.StoreResult(request, metadata=metadata)
             return response.success
         except Exception as e:
             print(f"Error storing result in DBOS: {e}")
@@ -179,7 +261,16 @@ class DBOSClient:
             
         try:
             request = dbos_pb2.GetResultRequest(agent_id=agent_id, request_id=request_id)
-            response = await self.stub.GetResult(request)
+            # Add trace context propagation
+            metadata = []
+            if OTEL_AVAILABLE:
+                try:
+                    from opentelemetry.propagate import inject
+                    inject(metadata)
+                except:
+                    pass  # Ignore tracing errors
+            
+            response = await self.stub.GetResult(request, metadata=metadata)
             
             if response.found:
                 return response.result.data

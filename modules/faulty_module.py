@@ -44,6 +44,17 @@ class FaultyModule(BaseWorker):
             payload = json.loads(msg.data.decode())
             self.logger.info(f"{self.name}: Received {payload}")
             request_id = payload.get("id")  # Extract request ID for state tracking
+            
+            # Extract trace context if present
+            trace_context = payload.pop('_trace_context', None)
+            if trace_context:
+                try:
+                    from opentelemetry.propagate import extract
+                    # Extract trace context to continue the trace
+                    context = extract(trace_context)
+                    # Set the current context (this would normally be done with a span)
+                except Exception as e:
+                    self.logger.debug(f"Could not extract trace context: {e}")
 
             # Report that we're running this specific request
             if request_id:

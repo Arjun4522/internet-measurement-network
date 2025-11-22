@@ -11,5 +11,6 @@ nats-observe @ git+https://github.com/arnavdas88/nats-observatory
 opentelemetry-api
 opentelemetry-sdk
 opentelemetry-exporter-otlp
+opentelemetry-instrumentation-grpc
 grpcio
 grpcio-tools

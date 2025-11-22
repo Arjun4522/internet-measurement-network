@@ -49,6 +49,15 @@ class BaseWorker:
             "request_id": request_id  # Include request_id if available
         }
         try:
+            # Add trace context to the state message
+            try:
+                from opentelemetry.propagate import inject
+                trace_data = {}
+                inject(trace_data)
+                state_data['_trace_context'] = trace_data
+            except Exception as e:
+                self.logger.debug(f"Could not inject trace context: {e}")
+                
             await self.nc.publish("agent.module.state", json.dumps(state_data).encode())
         except Exception as e:
             self.logger.error(f"Failed to report state: {e}")
