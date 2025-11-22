@@ -27,6 +27,17 @@ HEARTBEAT_TIMEOUT = HEARTBEAT_INTERVAL * 2  # If no heartbeat in 10s => dead
 OTLP_TRACE_ENDPOINT = os.environ.get("OTLP_TRACE_ENDPOINT", "otel-collector:4317")
 OTLP_METRICS_ENDPOINT = os.environ.get("OTLP_METRICS_ENDPOINT", "otel-collector:4317")
 OTLP_LOGS_ENDPOINT = os.environ.get("OTLP_LOGS_ENDPOINT", "otel-collector:4317")
+
+# Initialize gRPC instrumentation for DBOS client
+if os.environ.get("USE_DBOS", "false").lower() == "true":
+    try:
+        from opentelemetry.instrumentation.grpc import GrpcAioInstrumentorClient
+        # Instrument gRPC clients
+        grpc_aio_instrumentor = GrpcAioInstrumentorClient()
+        grpc_aio_instrumentor.instrument()
+        print("gRPC client instrumentation enabled")
+    except Exception as e:
+        print(f"Failed to enable gRPC client instrumentation: {e}")
 # ============================
 
 # 🧠 In-memory cache (fallback when DBOS is unavailable)

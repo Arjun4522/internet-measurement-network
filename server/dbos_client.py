@@ -1,6 +1,6 @@
 import grpc
 import asyncio
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 import os
 
@@ -11,25 +11,11 @@ import dbos_pb2_grpc
 # Import OpenTelemetry for trace context propagation
 OTEL_AVAILABLE = True
 try:
+    from opentelemetry import trace
     from opentelemetry.propagate import inject
-except:
-    OTEL_AVAILABLE = False
-
-# Check if OpenTelemetry is available
-try:
-    import opentelemetry
-    OTEL_AVAILABLE = True
+    from opentelemetry.instrumentation.grpc import GrpcAioInstrumentorClient
 except ImportError:
     OTEL_AVAILABLE = False
-
-# Import OpenTelemetry
-from opentelemetry import trace
-from opentelemetry.instrumentation.grpc import GrpcAioInstrumentorClient
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.semconv.resource import ResourceAttributes
 
 class DBOSClient:
     def __init__(self, dbos_address: str = "localhost:50051"):
@@ -37,7 +23,7 @@ class DBOSClient:
         self.channel = None
         self.stub = None
         # Initialize OpenTelemetry tracer
-        self.tracer = trace.get_tracer(__name__)
+        self.tracer = trace.get_tracer(__name__) if OTEL_AVAILABLE else None
         
     async def connect(self):
         """Establish connection to DBOS service"""
@@ -77,10 +63,14 @@ class DBOSClient:
             metadata = []
             if OTEL_AVAILABLE:
                 try:
-                    from opentelemetry.propagate import inject
-                    inject(metadata)
-                except:
-                    pass  # Ignore tracing errors
+                    # Create a carrier dict for trace context
+                    carrier = {}
+                    inject(carrier)
+                    # Convert carrier to gRPC metadata format (list of tuples)
+                    metadata = [(key, value) for key, value in carrier.items()]
+                except Exception as e:
+                    print(f"Warning: Could not inject trace context: {e}")
+                    metadata = []  # Use empty metadata if injection fails
             
             response = await self.stub.RegisterAgent(request, metadata=metadata)
             return response.success
@@ -99,10 +89,14 @@ class DBOSClient:
             metadata = []
             if OTEL_AVAILABLE:
                 try:
-                    from opentelemetry.propagate import inject
-                    inject(metadata)
-                except:
-                    pass  # Ignore tracing errors
+                    # Create a carrier dict for trace context
+                    carrier = {}
+                    inject(carrier)
+                    # Convert carrier to gRPC metadata format (list of tuples)
+                    metadata = [(key, value) for key, value in carrier.items()]
+                except Exception as e:
+                    print(f"Warning: Could not inject trace context: {e}")
+                    metadata = []  # Use empty metadata if injection fails
             
             response = await self.stub.GetAgent(request, metadata=metadata)
             
@@ -134,10 +128,14 @@ class DBOSClient:
             metadata = []
             if OTEL_AVAILABLE:
                 try:
-                    from opentelemetry.propagate import inject
-                    inject(metadata)
-                except:
-                    pass  # Ignore tracing errors
+                    # Create a carrier dict for trace context
+                    carrier = {}
+                    inject(carrier)
+                    # Convert carrier to gRPC metadata format (list of tuples)
+                    metadata = [(key, value) for key, value in carrier.items()]
+                except Exception as e:
+                    print(f"Warning: Could not inject trace context: {e}")
+                    metadata = []  # Use empty metadata if injection fails
             
             response = await self.stub.ListAgents(request, metadata=metadata)
             
@@ -179,10 +177,14 @@ class DBOSClient:
             metadata = []
             if OTEL_AVAILABLE:
                 try:
-                    from opentelemetry.propagate import inject
-                    inject(metadata)
-                except:
-                    pass  # Ignore tracing errors
+                    # Create a carrier dict for trace context
+                    carrier = {}
+                    inject(carrier)
+                    # Convert carrier to gRPC metadata format (list of tuples)
+                    metadata = [(key, value) for key, value in carrier.items()]
+                except Exception as e:
+                    print(f"Warning: Could not inject trace context: {e}")
+                    metadata = []  # Use empty metadata if injection fails
             
             response = await self.stub.SetModuleState(request, metadata=metadata)
             return response.success
@@ -201,10 +203,14 @@ class DBOSClient:
             metadata = []
             if OTEL_AVAILABLE:
                 try:
-                    from opentelemetry.propagate import inject
-                    inject(metadata)
-                except:
-                    pass  # Ignore tracing errors
+                    # Create a carrier dict for trace context
+                    carrier = {}
+                    inject(carrier)
+                    # Convert carrier to gRPC metadata format (list of tuples)
+                    metadata = [(key, value) for key, value in carrier.items()]
+                except Exception as e:
+                    print(f"Warning: Could not inject trace context: {e}")
+                    metadata = []  # Use empty metadata if injection fails
             
             response = await self.stub.GetModuleState(request, metadata=metadata)
             
@@ -243,10 +249,14 @@ class DBOSClient:
             metadata = []
             if OTEL_AVAILABLE:
                 try:
-                    from opentelemetry.propagate import inject
-                    inject(metadata)
-                except:
-                    pass  # Ignore tracing errors
+                    # Create a carrier dict for trace context
+                    carrier = {}
+                    inject(carrier)
+                    # Convert carrier to gRPC metadata format (list of tuples)
+                    metadata = [(key, value) for key, value in carrier.items()]
+                except Exception as e:
+                    print(f"Warning: Could not inject trace context: {e}")
+                    metadata = []  # Use empty metadata if injection fails
             
             response = await self.stub.StoreResult(request, metadata=metadata)
             return response.success
@@ -265,10 +275,14 @@ class DBOSClient:
             metadata = []
             if OTEL_AVAILABLE:
                 try:
-                    from opentelemetry.propagate import inject
-                    inject(metadata)
-                except:
-                    pass  # Ignore tracing errors
+                    # Create a carrier dict for trace context
+                    carrier = {}
+                    inject(carrier)
+                    # Convert carrier to gRPC metadata format (list of tuples)
+                    metadata = [(key, value) for key, value in carrier.items()]
+                except Exception as e:
+                    print(f"Warning: Could not inject trace context: {e}")
+                    metadata = []  # Use empty metadata if injection fails
             
             response = await self.stub.GetResult(request, metadata=metadata)
             
