@@ -1,0 +1,186 @@
+syntax = "proto3";
+
+package dbos;
+
+option go_package = "./api";
+
+// Agent represents a measurement agent in the system
+message Agent {
+  string id = 1;
+  string hostname = 2;
+  bool alive = 3;
+  int64 last_seen = 4;
+  int64 first_seen = 5;
+  map<string, string> config = 6;
+  int32 total_heartbeats = 7;
+}
+
+// ModuleState represents the state of a module execution
+message ModuleState {
+  string agent_id = 1;
+  string module_name = 2;
+  string state = 3;
+  string error_message = 4;
+  map<string, string> details = 5;
+  int64 timestamp = 6;
+  string request_id = 7;
+}
+
+// MeasurementResult represents a network measurement result
+message MeasurementResult {
+  string id = 1;
+  string agent_id = 2;
+  string module_name = 3;
+  bytes data = 4; // JSON-encoded result data
+  int64 timestamp = 5;
+}
+
+// Task represents a scheduled task
+message Task {
+  string id = 1;
+  string agent_id = 2;
+  string module_name = 3;
+  bytes payload = 4; // JSON-encoded task payload
+  int64 scheduled_at = 5;
+  int64 created_at = 6;
+  string status = 7;
+}
+
+// Agent Management Requests
+message RegisterAgentRequest {
+  Agent agent = 1;
+}
+
+message RegisterAgentResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message GetAgentRequest {
+  string agent_id = 1;
+}
+
+message GetAgentResponse {
+  bool found = 1;
+  Agent agent = 2;
+  string error = 3;
+}
+
+message ListAgentsRequest {}
+
+message ListAgentsResponse {
+  repeated Agent agents = 1;
+  string error = 2;
+}
+
+// Module State Requests
+message SetModuleStateRequest {
+  ModuleState state = 1;
+}
+
+message SetModuleStateResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message GetModuleStateRequest {
+  string request_id = 1;
+}
+
+message GetModuleStateResponse {
+  bool found = 1;
+  ModuleState state = 2;
+  string error = 3;
+}
+
+message ListModuleStatesRequest {
+  string agent_id = 1;
+  string module_name = 2;
+}
+
+message ListModuleStatesResponse {
+  repeated ModuleState states = 1;
+  string error = 2;
+}
+
+// Measurement Result Requests
+message StoreResultRequest {
+  MeasurementResult result = 1;
+}
+
+message StoreResultResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message GetResultRequest {
+  string agent_id = 1;
+  string request_id = 2;
+}
+
+message GetResultResponse {
+  bool found = 1;
+  MeasurementResult result = 2;
+  string error = 3;
+}
+
+message ListResultsRequest {
+  string agent_id = 1;
+}
+
+message ListResultsResponse {
+  repeated MeasurementResult results = 1;
+  string error = 2;
+}
+
+// Task Scheduling Requests
+message ScheduleTaskRequest {
+  Task task = 1;
+}
+
+message ScheduleTaskResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message GetTaskRequest {
+  string task_id = 1;
+}
+
+message GetTaskResponse {
+  bool found = 1;
+  Task task = 2;
+  string error = 3;
+}
+
+message ListDueTasksRequest {
+  int64 timestamp = 1;
+}
+
+message ListDueTasksResponse {
+  repeated Task tasks = 1;
+  string error = 2;
+}
+
+// DBOS Service Definition
+service DBOS {
+  // Agent Management
+  rpc RegisterAgent(RegisterAgentRequest) returns (RegisterAgentResponse);
+  rpc GetAgent(GetAgentRequest) returns (GetAgentResponse);
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
+  
+  // Module State Management
+  rpc SetModuleState(SetModuleStateRequest) returns (SetModuleStateResponse);
+  rpc GetModuleState(GetModuleStateRequest) returns (GetModuleStateResponse);
+  rpc ListModuleStates(ListModuleStatesRequest) returns (ListModuleStatesResponse);
+  
+  // Measurement Results
+  rpc StoreResult(StoreResultRequest) returns (StoreResultResponse);
+  rpc GetResult(GetResultRequest) returns (GetResultResponse);
+  rpc ListResults(ListResultsRequest) returns (ListResultsResponse);
+  
+  // Task Scheduling
+  rpc ScheduleTask(ScheduleTaskRequest) returns (ScheduleTaskResponse);
+  rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
+  rpc ListDueTasks(ListDueTasksRequest) returns (ListDueTasksResponse);
+}

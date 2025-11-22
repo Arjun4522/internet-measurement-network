@@ -1,0 +1,32 @@
+FROM golang:1.24.5-alpine AS builder
+
+WORKDIR /app
+
+# Copy go mod and sum files
+COPY dbos-go/go.mod dbos-go/go.sum ./
+
+# Download all dependencies
+RUN go mod download
+
+# Copy source code
+COPY dbos-go/ .
+
+# Build the binary
+RUN go build -o dbos cmd/main.go
+
+# Use a minimal alpine image for the final stage
+FROM alpine:latest
+
+# Install ca-certificates for HTTPS requests
+RUN apk --no-cache add ca-certificates
+
+WORKDIR /root/
+
+# Copy the binary from builder stage
+COPY --from=builder /app/dbos .
+
+# Expose the default port
+EXPOSE 50051
+
+# Command to run the executable
+CMD ["./dbos"]

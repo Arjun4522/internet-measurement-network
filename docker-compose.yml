@@ -9,28 +9,113 @@ services:
     networks:
       - aiori-net
 
-  nats-ui:
-    image: mdawar/nats-dashboard:latest
-    container_name: natsui
-    environment:
-      REVERSE_PROXY_UPSTREAM: 'http://nats-server:8222'  # Connect to NATS monitoring
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.92.0
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otlp/otel-collector-config.yaml:/etc/otel-collector-config.yaml
     ports:
-      - "9222:80"  # Dashboard access port
+      - "5081:5081"  # OTLP gRPC receiver
+      - "4317:4317"  # OTLP gRPC receiver (alternative)
+      - "4318:4318"  # OTLP HTTP receiver
+      - "8888:8888"  # Metrics endpoint
     depends_on:
       - nats
+      - data-prepper
     networks:
       - aiori-net
 
-  nui:
-    image: ghcr.io/nats-nui/nui:edge
-    volumes:
-     - ./db:/db
+  opensearch:
+    image: opensearchproject/opensearch:2.11.0
+    environment:
+      - cluster.name=opensearch-cluster
+      - node.name=opensearch-node
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - DISABLE_SECURITY_PLUGIN=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
     ports:
-     - "31312:31311" 
-    depends_on:
-       - nats
+      - "9200:9200"
+      - "9600:9600"
     networks:
       - aiori-net
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.11.0
+    environment:
+      - OPENSEARCH_HOSTS=["http://opensearch:9200"]
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+    ports:
+      - "5601:5601"
+    depends_on:
+      - opensearch
+    networks:
+      - aiori-net
+
+  data-prepper:
+    image: opensearchproject/data-prepper:2.12.0
+    volumes:
+      - ./docker/pipelines.yaml:/usr/share/data-prepper/pipelines/pipelines.yaml
+      - ./docker/data-prepper-config.yaml:/usr/share/data-prepper/config/data-prepper-config.yaml
+    ports:
+      - "21891:21891"  # OTLP traces
+      - "21892:21892"  # OTLP logs
+      - "21893:21893"  # OTLP metrics
+      - "4900:4900"    # Health check
+    depends_on:
+      - opensearch
+    networks:
+      - aiori-net
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    networks:
+      - aiori-net
+
+  dbos:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dbos
+    container_name: dbos
+    ports:
+      - "50051:50051"
+    depends_on:
+      - redis
+    networks:
+      - aiori-net
+    environment:
+      - REDIS_ADDR=redis:6379
+      - PORT=50051
+
+  server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.server
+    container_name: server
+    ports:
+      - "8000:8000"  # Server API
+    depends_on:
+      - nats
+      - otel-collector
+      - dbos
+    networks:
+      - aiori-net
+    environment:
+      - NATS_URL=nats://nats-server:4222
+      - OTLP_TRACE_ENDPOINT=otel-collector:4317
+      - OTLP_METRICS_ENDPOINT=otel-collector:4317
+      - OTLP_LOGS_ENDPOINT=otel-collector:4317
+      - USE_DBOS=true
+      - DBOS_ADDRESS=dbos:50051
 
   agent_1:
     build:
@@ -40,15 +125,19 @@ services:
     volumes:
       - ./:/app
     environment:
-      - NATS_URL=["nats://nats-server:4222"]
+      - NATS_URL=nats://nats-server:4222
       - AGENT_NAME=aiori_1
+      - OTLP_TRACE_ENDPOINT=otel-collector:4317
+      - OTLP_LOGS_ENDPOINT=otel-collector:4317
     ports:
       - "9101:9101"  # Agent metrics/API
     depends_on:
       - nats
+      - server
+      - otel-collector
     networks:
       - aiori-net
-    working_dir: /app  # Ensure correct working directory
+    working_dir: /app
 
   agent_2:
     build:
@@ -58,12 +147,16 @@ services:
     volumes:
       - ./:/app
     environment:
-      - NATS_URL=["nats://nats-server:4222"]
+      - NATS_URL=nats://nats-server:4222
       - AGENT_NAME=aiori_2
+      - OTLP_TRACE_ENDPOINT=otel-collector:4317
+      - OTLP_LOGS_ENDPOINT=otel-collector:4317
     ports:
       - "9102:9102"  # Changed port to avoid conflict
     depends_on:
       - nats
+      - server
+      - otel-collector
     networks:
       - aiori-net
     working_dir: /app

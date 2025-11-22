@@ -2,25 +2,144 @@
 
 ## 🏗️ Architecture
 
-```
-aiori-imn/
-├── agent/                 # Core agent module
-│   ├── __main__.py       # Agent entry point
-│   ├── agent.py          # Main agent class & NATS management
-│   ├── cli.py            # Typer-based CLI commands
-│   ├── config.py         # Configuration settings
-│   ├── module_manager.py # Dynamic module loading
-│   └── base.py           # BaseWorker class
-├── modules/              # Measurement modules
-│   ├── echo_module.py    # Basic echo functionality
-│   ├── faulty_module.py  # Error simulation module
-│   ├── heartbeat_module.py # System health monitoring
-│   └── ping_module.py    # NEW: Advanced ping with fallback
-├── docker/               # Docker configuration
-│   └── Dockerfile.agent  # Agent container definition
-├── docker-compose.yml    # Full stack deployment
-└── requirements.txt      # Python dependencies
-```
+### Overview
+
+The Internet Measurement Network (IMN) is a distributed system for performing network measurements using autonomous agents. The system uses NATS as a messaging backbone for communication between components, with OpenTelemetry for observability data collection and OpenSearch for data storage and visualization.
+
+The architecture consists of several key components:
+
+1. **Agents**: Autonomous measurement nodes that perform network tests
+2. **Server**: Central coordination service that manages agents
+3. **NATS**: Message broker for communication between components
+4. **OpenTelemetry Collector**: Aggregates and processes observability data
+5. **Data Prepper**: Transforms and routes telemetry data to OpenSearch
+6. **OpenSearch**: Storage and search engine for telemetry data
+7. **OpenSearch Dashboards**: Visualization interface for telemetry data
+
+### Component Details
+
+#### Agents (`src/aiori_agent/`)
+Autonomous measurement nodes that can dynamically load modules to perform various network tests. Key features include:
+- Dynamic module loading with hot-reloading capabilities
+- NATS integration for communication
+- OpenTelemetry instrumentation for observability
+- Crash recovery and error handling
+
+Each agent has:
+- A unique ID for identification
+- Multiple modules that can be loaded/unloaded dynamically
+- Input/output/error subjects for communication
+- Heartbeat mechanism for health monitoring
+
+#### Server (`server/`)
+Central coordination service that:
+- Maintains a registry of active agents
+- Receives heartbeats from agents
+- Provides REST API for querying agent status
+- Routes measurement requests to appropriate agents
+- Validates measurement requests against module schemas
+- Captures and stores module execution results
+- Provides REST API for retrieving detailed module results
+
+#### NATS (`docker-compose.yml`)
+Message broker that serves as the communication backbone:
+- Provides pub/sub messaging for all components
+- Handles agent-to-server and server-to-agent communication
+- Monitors agent health through heartbeat messages
+- Enables scalable, decoupled architecture
+
+#### OpenTelemetry Collector (`otlp/otel-collector-config.yaml`)
+Aggregates and processes observability data:
+- Receives traces, logs, and metrics from agents and server
+- Processes and batches telemetry data
+- Routes data to appropriate backends
+- Provides debugging output for development
+
+#### Data Prepper (`docker/pipelines.yaml`)
+Transforms and routes telemetry data:
+- Receives OTLP data from OpenTelemetry Collector
+- Processes traces, logs, and metrics separately
+- Stores data in appropriate OpenSearch indices
+- Generates service maps from trace data
+
+#### OpenSearch (`docker-compose.yml`)
+Storage and search engine for telemetry data:
+- Stores traces in multiple formats for different use cases
+- Stores logs with daily indexing
+- Stores metrics with daily indexing
+- Provides search and aggregation capabilities
+
+#### OpenSearch Dashboards (`docker-compose.yml`)
+Visualization interface:
+- Provides GUI for viewing telemetry data
+- Enables creation of custom dashboards
+- Allows exploration of stored data
+
+## 📊 Data Flow
+
+1. **Agent Registration**:
+   - Agents start and send heartbeat messages to `agent.heartbeat_module` subject
+   - Server receives heartbeats and maintains agent registry
+   - Agents are marked alive/dead based on heartbeat timing
+
+2. **Measurement Request**:
+   - Client sends request to server API endpoint `/agent/{agent_id}/{module_name}`
+   - Server validates request against module schema
+   - Server publishes request to appropriate NATS subject
+   - Agent receives request on its input subject
+
+3. **Measurement Execution**:
+   - Agent executes measurement using loaded module
+   - Module performs network test (ping, etc.)
+   - Results are processed and formatted
+
+4. **Result Reporting**:
+   - Agent publishes results to output subject
+   - Server captures and stores results in memory
+   - Errors are published to error subject
+   - OpenTelemetry data is sent to collector
+
+5. **Data Processing**:
+   - OpenTelemetry Collector receives observability data
+   - Data is processed and batched
+   - Data is forwarded to Data Prepper
+
+6. **Data Storage**:
+   - Data Prepper transforms data for storage
+   - Data is stored in appropriate OpenSearch indices
+   - Service maps are generated from trace data
+
+7. **Data Visualization**:
+   - OpenSearch Dashboards accesses stored data
+   - Users create visualizations and dashboards
+   - Metrics, logs, and traces are viewable
+
+## 🔍 Trace Organization in OpenSearch
+
+Currently, traces are organized by agent-specific subjects rather than by module names:
+
+- **Heartbeat traces**: Use consistent subject `agent.heartbeat_module` across all agents
+- **Module traces**: Use agent-specific subjects like `agent.{agent_id}.in` and `agent.{agent_id}.out`
+
+This means:
+- Heartbeat traces are easily searchable by module name
+- Module traces are only searchable by agent-specific subject names
+- Service maps show communication patterns but are organized by agent IDs rather than module types
+
+## 🐳 Docker Services
+
+| Service | Image | Ports | Purpose |
+|---------|-------|-------|---------|
+| `nats` | `nats:latest` | 4222, 8222 | Core messaging bus |
+| `otel-collector` | `otel/opentelemetry-collector-contrib:0.92.0` | 5081, 4317, 4318, 8888 | Telemetry collection and processing |
+| `opensearch` | `opensearchproject/opensearch:2.11.0` | 9200, 9600 | Data storage and search |
+| `opensearch-dashboards` | `opensearchproject/opensearch-dashboards:2.11.0` | 5601 | Data visualization |
+| `data-prepper` | `opensearchproject/data-prepper:2.12.0` | 21891, 21892, 21893, 4900 | Data transformation and routing |
+| `redis` | `redis:latest` | 6379 | DBOS data storage |
+| `dbos` | Custom build | 50051 | Persistent storage and state management |
+| `server` | Custom build | 8000 | Agent coordination and API |
+| `agent_1` | Custom build | 9101 | Measurement agent 1 |
+| `agent_2` | Custom build | 9102 | Measurement agent 2 |
 
 ## 🚀 Quick Start
 
@@ -41,6 +160,8 @@ aiori-imn/
    - **NATS UI Dashboard:** `localhost:9222` (web interface)
    - **Agent 1 API:** `localhost:9101` (metrics/control)
    - **Agent 2 API:** `localhost:9102` (metrics/control)
+   - **DBOS Service:** `localhost:50051` (gRPC API)
+   - **Redis:** `localhost:6379` (database)
 
 ### Running Agents Locally (Development)
 
@@ -59,7 +180,380 @@ aiori-imn/
    python -m agent start
    ```
 
-## 🎯 Using the New Ping Module
+## 🧪 Comprehensive Testing Guide
+
+### Prerequisites
+Before testing, ensure all services are running:
+```bash
+# Start the complete system
+docker-compose up -d
+
+# Wait for services to initialize (30-60 seconds)
+sleep 30
+
+# Verify services are running
+docker-compose ps
+```
+
+### 1. Verify System Health
+
+#### Check Server Status
+```bash
+# Check if server is responsive
+curl -s localhost:8000/ | jq .
+
+# Expected response:
+# {
+#   "status": "ok",
+#   "total_agents": 2,
+#   "alive_agents": 2
+# }
+```
+
+#### List Available Agents
+```bash
+# Get list of alive agents and their IDs
+curl -s localhost:8000/agents/alive | jq 'keys[]'
+
+# Example output:
+# "a4cd3d41-d26d-40fb-874d-347561fe8ef3"
+# "e36bfca1-6607-414b-b52e-1c3b231bd71c"
+```
+
+### 2. Module Testing Procedures
+
+#### Ping Module (Network Connectivity Testing)
+```bash
+# Trigger ping module
+AGENT_ID="a4cd3d41-d26d-40fb-874d-347561fe8ef3"
+curl -X POST "http://localhost:8000/agent/$AGENT_ID/ping_module" \
+-H "Content-Type: application/json" \
+-d '{"host": "8.8.8.8", "count": 4}'
+
+# Check result and state
+REQUEST_ID=$(curl -s -X POST "http://localhost:8000/agent/$AGENT_ID/ping_module" \
+-H "Content-Type: application/json" \
+-d '{"host": "8.8.8.8", "count": 4}' | jq -r '.id')
+
+# Retrieve detailed results
+curl -s "http://localhost:8000/agents/$AGENT_ID/results/$REQUEST_ID" | jq .
+
+# Monitor execution state
+curl -s "http://localhost:8000/modules/states/$REQUEST_ID" | jq .
+
+# Expected result format:
+# {
+#   "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+#   "address": "8.8.8.8",
+#   "rtts": [12.34, 11.56, 13.78, 12.91],
+#   "packets_received": 4,
+#   "packets_sent": 4
+# }
+```
+
+#### Echo Module (Message Testing)
+```bash
+# Trigger echo module
+AGENT_ID="a4cd3d41-d26d-40fb-874d-347561fe8ef3"
+curl -X POST "http://localhost:8000/agent/$AGENT_ID/echo_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Hello World Test"}'
+
+# Check result and state
+REQUEST_ID=$(curl -s -X POST "http://localhost:8000/agent/$AGENT_ID/echo_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Hello World Test"}' | jq -r '.id')
+
+# Retrieve detailed results
+curl -s "http://localhost:8000/agents/$AGENT_ID/results/$REQUEST_ID" | jq .
+
+# Monitor execution state
+curl -s "http://localhost:8000/modules/states/$REQUEST_ID" | jq .
+
+# Expected result format:
+# {
+#   "message": "Hello World Test",
+#   "id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+#   "processed_at": 1234567890.123,
+#   "from_module": "working_module"
+# }
+```
+
+#### Faulty Module (Error Handling Testing)
+```bash
+# Normal operation test
+AGENT_ID="a4cd3d41-d26d-40fb-874d-347561fe8ef3"
+curl -X POST "http://localhost:8000/agent/$AGENT_ID/faulty_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Normal Test"}'
+
+# Check successful execution
+REQUEST_ID=$(curl -s -X POST "http://localhost:8000/agent/$AGENT_ID/faulty_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Normal Test"}' | jq -r '.id')
+
+curl -s "http://localhost:8000/agents/$AGENT_ID/results/$REQUEST_ID" | jq .
+curl -s "http://localhost:8000/modules/states/$REQUEST_ID" | jq .
+
+# Delay simulation test
+REQUEST_ID_DELAY=$(curl -s -X POST "http://localhost:8000/agent/$AGENT_ID/faulty_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Delay Test", "delay": 3}' | jq -r '.id')
+
+# Check state during processing
+curl -s "http://localhost:8000/modules/states/$REQUEST_ID_DELAY" | jq .
+
+# Error simulation test
+REQUEST_ID_ERROR=$(curl -s -X POST "http://localhost:8000/agent/$AGENT_ID/faulty_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Error Test", "crash": true}' | jq -r '.id')
+
+# Check error state
+curl -s "http://localhost:8000/modules/states/$REQUEST_ID_ERROR" | jq .
+
+# Expected error state:
+# {
+#   "agent_id": "a4cd3d41-d26d-40fb-874d-347561fe8ef3",
+#   "module_name": "faulty_module",
+#   "state": "error",
+#   "timestamp": "2023-01-01T12:00:00Z",
+#   "error_message": "Intentional crash triggered.",
+#   "details": {
+#     "action": "request_failed"
+#   }
+# }
+```
+
+### 3. Advanced Testing Scenarios
+<!-- 
+#### Bulk Testing Script
+```bash
+#!/bin/bash
+# bulk_test.sh - Test multiple modules sequentially
+
+AGENT_ID="a4cd3d41-d26d-40fb-874d-347561fe8ef3"
+
+echo "=== Bulk Module Testing ==="
+
+# Test 1: Ping Module
+echo "Testing Ping Module..."
+PING_ID=$(curl -s -X POST "http://localhost:8000/agent/$AGENT_ID/ping_module" \
+-H "Content-Type: application/json" \
+-d '{"host": "1.1.1.1", "count": 3}' | jq -r '.id')
+sleep 2
+curl -s "http://localhost:8000/modules/states/$PING_ID" | jq '.state'
+
+# Test 2: Echo Module
+echo "Testing Echo Module..."
+ECHO_ID=$(curl -s -X POST "http://localhost:8000/agent/$AGENT_ID/echo_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Bulk Test"}' | jq -r '.id')
+sleep 1
+curl -s "http://localhost:8000/modules/states/$ECHO_ID" | jq '.state'
+
+# Test 3: Faulty Module
+echo "Testing Faulty Module..."
+FAULTY_ID=$(curl -s -X POST "http://localhost:8000/agent/$AGENT_ID/faulty_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Bulk Test"}' | jq -r '.id')
+sleep 1
+curl -s "http://localhost:8000/modules/states/$FAULTY_ID" | jq '.state'
+
+echo "=== Test Results ==="
+echo "Ping: $(curl -s "http://localhost:8000/modules/states/$PING_ID" | jq -r '.state')"
+echo "Echo: $(curl -s "http://localhost:8000/modules/states/$ECHO_ID" | jq -r '.state')"
+echo "Faulty: $(curl -s "http://localhost:8000/modules/states/$FAULTY_ID" | jq -r '.state')"
+```
+
+#### Concurrent Testing
+```bash
+# Test multiple modules simultaneously
+AGENT_ID="a4cd3d41-d26d-40fb-874d-347561fe8ef3"
+
+# Start all tests concurrently
+curl -X POST "http://localhost:8000/agent/$AGENT_ID/ping_module" \
+-H "Content-Type: application/json" \
+-d '{"host": "8.8.8.8", "count": 2}' &
+
+curl -X POST "http://localhost:8000/agent/$AGENT_ID/echo_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Concurrent Test"}' &
+
+curl -X POST "http://localhost:8000/agent/$AGENT_ID/faulty_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "Concurrent Test"}' &
+
+wait  # Wait for all background jobs to complete
+``` -->
+
+## 📥 Retrieving Module Results
+
+The server now automatically captures and stores detailed results from module executions. Instead of only receiving a generic success message, you can now retrieve the actual metrics and data from each module execution.
+
+### New API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `GET /agents/{agent_id}/results` | GET | Get all results for a specific agent |
+| `GET /agents/{agent_id}/results/{request_id}` | GET | Get specific result by request ID |
+| `DELETE /agents/{agent_id}/results/{request_id}` | DELETE | Delete a specific result |
+
+### Example Usage
+
+#### Ping Module Results
+When you trigger a ping command:
+```bash
+# Trigger ping and save the request ID
+RESPONSE=$(curl -s -X POST "http://localhost:8000/agent/{agent_id}/ping_module" \
+-H "Content-Type: application/json" \
+-d '{"host": "8.8.8.8", "count": 4}')
+
+REQUEST_ID=$(echo $RESPONSE | jq -r '.id')
+```
+
+You can then retrieve the detailed results:
+```bash
+# Get the specific result
+curl -s "http://localhost:8000/agents/{agent_id}/results/$REQUEST_ID" | jq .
+
+# Example response:
+{
+  "id": "06cd58b9-41bb-4fe2-a280-9d25f6c81a5f",
+  "address": "8.8.8.8",
+  "rtts": [43.98, 41.23, 42.67, 44.12],
+  "packets_received": 4,
+  "packets_sent": 4
+}
+```
+
+#### Result Storage
+- Results are stored in-memory on the server
+- Each result is keyed by agent ID and request ID
+- Results are automatically captured when agents publish to their output topics
+- Results persist until manually deleted or the server restarts
+
+## 📊 Retrieving Module States
+
+The server tracks the execution state of each module request by request ID. You can monitor the progress and status of your requests using the state endpoints.
+
+### State API Endpoint
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `GET /modules/states/{request_id}` | GET | Get module state by request ID |
+
+### State Values
+- `started` - Module has been initialized
+- `running` - Module is actively processing the request
+- `completed` - Module has successfully finished processing
+- `error` - Module encountered an error during processing
+- `failed` - Module failed critically
+
+### Example Usage
+
+#### Track Echo Module State
+```bash
+# Trigger echo module with a specific request ID
+curl -X POST "http://localhost:8000/agent/{agent_id}/echo_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "test message", "id": "echo-test-123"}'
+
+# Check the state of the request
+curl -s "http://localhost:8000/modules/states/echo-test-123" | jq .
+```
+
+Example state response:
+```json
+{
+  "agent_id": "agent-123",
+  "module_name": "echo_module",
+  "state": "completed",
+  "timestamp": "2023-01-01T12:00:00Z",
+  "details": {
+    "action": "request_completed"
+  }
+}
+```
+
+#### 2. Trigger Ping Module
+```bash
+# Trigger ping module on a specific agent
+curl -X POST "http://localhost:8000/agent/{agent_id}/ping_module" \
+-H "Content-Type: application/json" \
+-d '{"host": "8.8.8.8", "count": 4}'
+```
+
+#### 3. Trigger Echo Module
+```bash
+# Trigger echo module on a specific agent
+curl -X POST "http://localhost:8000/agent/{agent_id}/echo_module" \
+-H "Content-Type: application/json" \
+-d '{"message": "test message"}'
+```
+
+#### 4. View Traces in OpenSearch
+```bash
+# View recent traces (organized by agent-specific subjects)
+curl -s -X POST "localhost:9200/otel-v1-apm-span-*/_search" \
+-H "Content-Type: application/json" \
+-d '{"size": 10, "sort": [{"startTime": {"order": "desc"}}]}' \
+| jq '.hits.hits[]._source | {name, serviceName, traceId, traceGroup, startTime}'
+
+# Search for specific agent traces
+curl -s -X POST "localhost:9200/otel-v1-apm-span-*/_search" \
+-H "Content-Type: application/json" \
+-d '{"size": 10, "query": {"wildcard": {"name": "*{agent_id}*"}}}' \
+| jq '.hits.hits[]._source | {name, serviceName, traceId, traceGroup, startTime}'
+
+# View service maps
+curl -s localhost:9200/otel-v1-apm-service-map/_search?pretty
+```
+
+## 📥 Retrieving Module Results
+
+The server now automatically captures and stores detailed results from module executions. Instead of only receiving a generic success message, you can now retrieve the actual metrics and data from each module execution.
+
+### New API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `GET /agents/{agent_id}/results` | GET | Get all results for a specific agent |
+| `GET /agents/{agent_id}/results/{request_id}` | GET | Get specific result by request ID |
+| `DELETE /agents/{agent_id}/results/{request_id}` | DELETE | Delete a specific result |
+
+### Example Usage
+
+#### Ping Module Results
+When you trigger a ping command:
+```bash
+# Trigger ping and save the request ID
+RESPONSE=$(curl -s -X POST "http://localhost:8000/agent/{agent_id}/ping_module" \
+-H "Content-Type: application/json" \
+-d '{"host": "8.8.8.8", "count": 4}')
+
+REQUEST_ID=$(echo $RESPONSE | jq -r '.id')
+```
+
+You can then retrieve the detailed results:
+```bash
+# Get the specific result
+curl -s "http://localhost:8000/agents/{agent_id}/results/$REQUEST_ID" | jq .
+
+# Example response:
+{
+  "id": "06cd58b9-41bb-4fe2-a280-9d25f6c81a5f",
+  "address": "8.8.8.8",
+  "rtts": [43.98, 41.23, 42.67, 44.12],
+  "packets_received": 4,
+  "packets_sent": 4
+}
+```
+
+#### Result Storage
+- Results are stored in-memory on the server
+- Each result is keyed by agent ID and request ID
+- Results are automatically captured when agents publish to their output topics
+- Results persist until manually deleted or the server restarts
 
 The new `ping_module.py` provides advanced network measurement capabilities:
 
@@ -108,15 +602,50 @@ Send a JSON message to the agent's input subject:
 | `agent.{id}.error` | Error messages | Error comes out from here |
 | `heartbeat.{id}` | System health status | Heartbeat |
 
-## 🐳 Docker Services
+## 🔧 Areas for Improvement
 
-| Service | Image | Ports | Purpose |
-|---------|-------|-------|---------|
-| `nats` | `nats:latest` | 4222, 8222 | Core messaging bus |
-| `nats-ui` | `mdawar/nats-dashboard` | 9222 | Web dashboard |
-| `nui` | `ghcr.io/nats-nui/nui` | 31312 | Native UI |
-| `agent_1` | Custom build | 9101 | Measurement agent 1 |
-| `agent_2` | Custom build | 9102 | Measurement agent 2 |
+### Enhanced Result Accessibility
+The system now provides direct access to detailed module execution results through REST API endpoints, addressing the previous limitation where users only received generic success messages. This enhancement enables:
+
+1. **Real-time result retrieval**: Access detailed metrics without relying solely on OpenSearch
+2. **Programmatic result consumption**: Build applications that can programmatically retrieve and process measurement results
+3. **Immediate feedback**: Get instant access to results without waiting for data to be processed and stored in OpenSearch
+
+### Trace Context Propagation
+Currently, only heartbeat traces are well-organized in OpenSearch. To improve trace visibility for all modules:
+
+1. **Implement consistent trace context propagation**:
+   - Modify the NATS client to automatically inject/extract trace context in message headers
+   - Ensure trace context flows through the entire request-response cycle
+
+2. **Enhance module-level tracing**:
+   - Add module-specific spans for operations (e.g., "ping_execution", "echo_processing")
+   - Include module metadata in trace attributes
+
+3. **Improve trace grouping**:
+   - Organize traces by module type rather than agent-specific subjects
+   - Create meaningful trace group names like "ping_module_execution" or "echo_module_response"
+
+### Better Service Maps
+To create more meaningful service maps:
+
+1. **Add module-level service identification**:
+   - Include module names in service metadata
+   - Create service relationships based on module interactions
+
+2. **Enhance trace attributes**:
+   - Add module-specific attributes to traces
+   - Include request/response metadata in trace attributes
+
+### Searchable Traces
+To make traces more discoverable:
+
+1. **Standardize trace naming**:
+   - Use consistent naming conventions across all modules
+   - Include module names in span names
+
+2. **Add searchable tags**:
+   - Include module type, operation type, and other metadata as indexed attributes
 
 ## Run
 
@@ -125,3 +654,188 @@ $ python3 -m nats_observe
 $ python3 -m fastapi run server/main.py
 $ python3 -m aiori_agent  --nats_url nats://192.168.19.169:4222 --agent_id f7c34015-2b5c-4b95-b1bf-5e5391241dac --modules_path /internet-measurement-network/modules/
 ```
+
+## 📋 Key Findings
+
+During investigation, it was discovered that:
+
+1. **All modules ARE being traced** - Both heartbeat and other modules (ping, echo) generate traces
+2. **Traces are organized differently** - Heartbeat traces use consistent subjects, while module traces use agent-specific subjects
+3. **Service maps ARE generated** - Communication patterns between server and agents are captured
+4. **Trace context flows correctly** - Requests from server to agents maintain trace context
+
+The main limitation is organizational - traces are searchable but not intuitively organized by module type, making it difficult to find specific module executions without knowing the agent-specific subject names.
+
+## 🔄 DBOS - Distributed Business Operating System
+
+A new Go-based microservice has been developed to handle persistent storage and state management for the Internet Measurement Network system. The DBOS service is now dockerized and integrated into the main docker-compose setup. The service provides:
+
+### Features
+- **Runtime State Management** - Agents, requests, module states
+- **Network Measurement Results Storage** - Persistent storage of measurement data
+- **Control-Plane Coordination** - Scheduling, task management, and coordination
+- **High Performance** - Built with Go and Redis for fast, reliable persistence
+- **gRPC Interface** - Clean API for Python server integration
+
+### Architecture
+```
+Python Server ←→ gRPC ←→ DBOS Service ←→ Redis
+```
+
+### Components
+- **gRPC Server** - Exposes APIs for Python server to interact with
+- **State Manager** - Handles agent and module state transitions
+- **Result Store** - Manages storage and retrieval of measurement results
+- **Scheduler** - Handles task scheduling and coordination
+- **Redis Client** - Connects to Redis for persistent storage
+
+### API Endpoints
+#### Agent Management
+- RegisterAgent
+- GetAgent
+- ListAgents
+
+#### Module State Management
+- SetModuleState
+- GetModuleState
+- ListModuleStates
+
+#### Measurement Results
+- StoreResult
+- GetResult
+- ListResults
+
+#### Task Scheduling
+- ScheduleTask
+- GetTask
+- ListDueTasks
+
+### Integration Plan
+The DBOS service is designed to replace the in-memory caches currently used by the Python server with persistent storage. The integration will involve:
+
+1. Replacing in-memory agent cache with DBOS gRPC client calls
+2. Replacing in-memory results cache with persistent storage via DBOS
+3. Replacing in-memory module state tracking with DBOS state management
+4. Adding DBOS client initialization in server startup
+5. Updating API endpoints to use DBOS for agent management
+6. Updating NATS handlers to store state changes in DBOS
+7. Adding error handling and fallback mechanisms for DBOS connectivity
+8. Adding configuration options for DBOS service address
+9. Implementing connection pooling for gRPC client
+10. Adding metrics and monitoring for DBOS integration
+
+### Setup
+The DBOS service is now fully dockerized and integrated into the main docker-compose setup. To run the complete system with DBOS:
+
+1. Start the complete system:
+   ```bash
+   docker-compose up
+   ```
+
+The DBOS service will automatically start with the required Redis dependency, and the Python server is configured to connect to it by default.
+
+If you want to run DBOS separately for development:
+
+1. Install Go dependencies:
+   ```bash
+   cd dbos-go
+   go mod tidy
+   ```
+
+2. Generate protobuf code for Go (if needed):
+   ```bash
+   cd dbos-go
+   protoc --go_out=. --go-grpc_out=. api/dbos.proto
+   ```
+
+3. Install Redis (using Docker):
+   ```bash
+   docker run -d --name redis-dbos -p 6379:6379 redis:latest
+   ```
+
+4. Start the DBOS server:
+   ```bash
+   cd dbos-go
+   go run cmd/main.go
+   ```
+
+5. Install Python gRPC dependencies:
+   ```bash
+   pip install grpcio grpcio-tools
+   ```
+
+6. Generate Python gRPC client code:
+   ```bash
+   python -m grpc_tools.protoc -I./dbos-go/api --python_out=./server --grpc_python_out=./server ./dbos-go/api/dbos.proto
+   ```
+
+7. Configure the Python server to connect to DBOS by setting the appropriate environment variables:
+   ```bash
+   export USE_DBOS=true
+   export DBOS_ADDRESS=localhost:50051
+   ```
+
+### Testing DBOS Integration
+To test the DBOS integration:
+
+1. Start Redis and DBOS service as shown above
+2. Run the integration test script:
+   ```bash
+   python test_dbos_integration.py
+   ```
+
+3. Or test with the gRPC client:
+   ```bash
+   cd dbos-go
+   go run test/grpc_client.go
+   ```
+
+## 🚀 Next Steps
+
+To improve the observability experience:
+
+1. **Refactor trace naming** - Modify the system to organize traces by module type rather than agent IDs
+2. **Enhance trace attributes** - Add more metadata to make traces more informative
+3. **Improve service map generation** - Create more meaningful service relationships based on module interactions
+4. **Add module-specific dashboards** - Create OpenSearch Dashboards visualizations for each module type
+
+## 🔮 Future Work
+
+### DBOS Integration
+Complete the integration of the DBOS service with the Python server to enable persistent storage and improved state management:
+
+1. Implement the DBOS gRPC client in the Python server
+2. Replace in-memory data structures with DBOS service calls
+3. Add comprehensive error handling and fallback mechanisms
+4. Implement connection pooling for improved performance
+5. Add monitoring and metrics for DBOS integration
+
+### Enhanced Module System
+1. **Dynamic Module Loading** - Enable agents to load/unload modules without restart
+2. **Module Versioning** - Support multiple versions of the same module
+3. **Module Dependencies** - Allow modules to declare and manage dependencies
+4. **Module Configuration** - Provide standardized configuration mechanisms
+
+### Advanced Scheduling
+1. **Cron-like Scheduling** - Support recurring measurement tasks
+2. **Conditional Execution** - Execute tasks based on previous results
+3. **Load Balancing** - Distribute tasks across multiple agents
+4. **Priority Queuing** - Prioritize critical measurements
+
+### Improved Security
+1. **Authentication** - Add authentication for agent registration
+2. **Authorization** - Control which agents can execute which modules
+3. **Encryption** - Encrypt sensitive data in transit and at rest
+4. **Audit Logging** - Track all system activities for compliance
+
+### Enhanced Observability
+1. **Custom Metrics** - Allow modules to define custom metrics
+2. **Alerting** - Implement alerting based on measurement results
+3. **Anomaly Detection** - Automatically detect unusual network behavior
+4. **Historical Analysis** - Enable trend analysis over time
+
+### Scalability Improvements
+1. **Sharding** - Distribute agents across multiple servers
+2. **Clustering** - Enable multiple server instances for redundancy
+3. **Streaming** - Support real-time streaming of measurement results
+4. **Batch Processing** - Optimize for high-volume measurements
