@@ -78,11 +78,14 @@ services:
 
   redis:
     image: redis:latest
-    command: "--protected-mode no"
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
     ports:
       - "6379:6379"
     networks:
       - aiori-net
+    volumes:
+      - ./docker/redis.conf:/usr/local/etc/redis/redis.conf
+      - redis-data:/data
 
   dbos:
     build:
@@ -166,6 +169,9 @@ services:
     networks:
       - aiori-net
     working_dir: /app
+
+volumes:
+  redis-data:
 
 networks:
   aiori-net:
