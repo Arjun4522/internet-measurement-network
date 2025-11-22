@@ -74,6 +74,28 @@ services:
     networks:
       - aiori-net
 
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    networks:
+      - aiori-net
+
+  dbos:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dbos
+    container_name: dbos
+    ports:
+      - "50051:50051"
+    depends_on:
+      - redis
+    networks:
+      - aiori-net
+    environment:
+      - REDIS_ADDR=redis:6379
+      - PORT=50051
+
   server:
     build:
       context: .
@@ -84,6 +106,7 @@ services:
     depends_on:
       - nats
       - otel-collector
+      - dbos
     networks:
       - aiori-net
     environment:
@@ -91,6 +114,8 @@ services:
       - OTLP_TRACE_ENDPOINT=otel-collector:4317
       - OTLP_METRICS_ENDPOINT=otel-collector:4317
       - OTLP_LOGS_ENDPOINT=otel-collector:4317
+      - USE_DBOS=true
+      - DBOS_ADDRESS=dbos:50051
 
   agent_1:
     build:

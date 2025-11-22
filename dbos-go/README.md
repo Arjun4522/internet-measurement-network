@@ -127,3 +127,57 @@ When enabled, the Python server will:
 - Store module states in DBOS
 - Store measurement results in DBOS
 - Retrieve data from DBOS when available, with in-memory cache as fallback
+
+## Data Durability with Redis AOF
+
+DBOS uses Redis for persistent storage. To ensure data durability and prevent data loss in case of system failures, Redis's Append-Only File (AOF) persistence can be enabled.
+
+### AOF Configuration
+
+To enable AOF persistence, modify your Redis configuration:
+
+```redis
+# Enable AOF persistence
+appendonly yes
+
+# AOF filename
+appendfilename "appendonly.aof"
+
+# AOF sync strategy
+# Options: always (slow but safest), everysec (good balance), no (fast but unsafe)
+appendfsync everysec
+
+# AOF rewrite configuration
+auto-aof-rewrite-percentage 100
+auto-aof-rewrite-min-size 64mb
+```
+
+### AOF Benefits
+
+1. **Durability**: Data is persisted to disk as commands are executed
+2. **Recovery**: Automatic recovery after restarts
+3. **Consistency**: Maintains data consistency even during unexpected shutdowns
+
+### Production Deployment with AOF
+
+For production environments, consider using a dedicated Redis instance with AOF enabled:
+
+```bash
+# Using Docker with AOF persistence
+docker run -d \
+  --name redis-dbos \
+  -p 6379:6379 \
+  -v /path/to/redis/data:/data \
+  redis:latest \
+  redis-server \
+  --appendonly yes \
+  --appendfsync everysec \
+  --save 900 1 \
+  --save 300 10 \
+  --save 60 10000
+```
+
+This configuration ensures:
+- Data is fsynced to disk every second
+- Periodic RDB snapshots for additional backup
+- Persistent volume mounting for data retention

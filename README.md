@@ -135,6 +135,8 @@ This means:
 | `opensearch` | `opensearchproject/opensearch:2.11.0` | 9200, 9600 | Data storage and search |
 | `opensearch-dashboards` | `opensearchproject/opensearch-dashboards:2.11.0` | 5601 | Data visualization |
 | `data-prepper` | `opensearchproject/data-prepper:2.12.0` | 21891, 21892, 21893, 4900 | Data transformation and routing |
+| `redis` | `redis:latest` | 6379 | DBOS data storage |
+| `dbos` | Custom build | 50051 | Persistent storage and state management |
 | `server` | Custom build | 8000 | Agent coordination and API |
 | `agent_1` | Custom build | 9101 | Measurement agent 1 |
 | `agent_2` | Custom build | 9102 | Measurement agent 2 |
@@ -158,6 +160,8 @@ This means:
    - **NATS UI Dashboard:** `localhost:9222` (web interface)
    - **Agent 1 API:** `localhost:9101` (metrics/control)
    - **Agent 2 API:** `localhost:9102` (metrics/control)
+   - **DBOS Service:** `localhost:50051` (gRPC API)
+   - **Redis:** `localhost:6379` (database)
 
 ### Running Agents Locally (Development)
 
@@ -321,7 +325,7 @@ curl -s "http://localhost:8000/modules/states/$REQUEST_ID_ERROR" | jq .
 ```
 
 ### 3. Advanced Testing Scenarios
-
+<!-- 
 #### Bulk Testing Script
 ```bash
 #!/bin/bash
@@ -380,7 +384,7 @@ curl -X POST "http://localhost:8000/agent/$AGENT_ID/faulty_module" \
 -d '{"message": "Concurrent Test"}' &
 
 wait  # Wait for all background jobs to complete
-```
+``` -->
 
 ## 📥 Retrieving Module Results
 
@@ -664,7 +668,7 @@ The main limitation is organizational - traces are searchable but not intuitivel
 
 ## 🔄 DBOS - Distributed Business Operating System
 
-A new Go-based microservice has been developed to handle persistent storage and state management for the Internet Measurement Network system. The DBOS service provides:
+A new Go-based microservice has been developed to handle persistent storage and state management for the Internet Measurement Network system. The DBOS service is now dockerized and integrated into the main docker-compose setup. The service provides:
 
 ### Features
 - **Runtime State Management** - Agents, requests, module states
@@ -721,6 +725,17 @@ The DBOS service is designed to replace the in-memory caches currently used by t
 10. Adding metrics and monitoring for DBOS integration
 
 ### Setup
+The DBOS service is now fully dockerized and integrated into the main docker-compose setup. To run the complete system with DBOS:
+
+1. Start the complete system:
+   ```bash
+   docker-compose up
+   ```
+
+The DBOS service will automatically start with the required Redis dependency, and the Python server is configured to connect to it by default.
+
+If you want to run DBOS separately for development:
+
 1. Install Go dependencies:
    ```bash
    cd dbos-go
