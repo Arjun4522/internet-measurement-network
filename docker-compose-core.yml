@@ -1,0 +1,100 @@
+services:
+  nats:
+    image: nats:latest
+    command: "--config /etc/nats.conf"
+    hostname: nats-server
+    ports:
+      - "8222:8222"  # Monitoring port
+      - "4222:4222"  # Client connection port
+    volumes:
+      - ./docker/nats.conf:/etc/nats.conf
+    networks:
+      - aiori-net
+
+  redis:
+    image: redis:latest
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    ports:
+      - "6379:6379"
+    networks:
+      - aiori-net
+    volumes:
+      - ./docker/redis.conf:/usr/local/etc/redis/redis.conf
+      - redis-data:/data
+
+  dbos:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dbos
+    container_name: dbos
+    ports:
+      - "50051:50051"
+    depends_on:
+      - redis
+    networks:
+      - aiori-net
+    environment:
+      - REDIS_ADDR=redis:6379
+      - PORT=50051
+
+  server:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.server
+    container_name: server
+    ports:
+      - "8000:8000"  # Server API
+    depends_on:
+      - nats
+      - dbos
+    networks:
+      - aiori-net
+    environment:
+      - NATS_URL=nats://nats-server:4222
+      - USE_DBOS=true
+      - DBOS_ADDRESS=dbos:50051
+
+  agent_1:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+    container_name: agent_1
+    volumes:
+      - ./:/app
+    environment:
+      - NATS_URL=nats://nats-server:4222
+      - AGENT_NAME=aiori_1
+    ports:
+      - "9101:9101"  # Agent metrics/API
+    depends_on:
+      - nats
+      - server
+    networks:
+      - aiori-net
+    working_dir: /app
+
+  agent_2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+    container_name: agent_2
+    volumes:
+      - ./:/app
+    environment:
+      - NATS_URL=nats://nats-server:4222
+      - AGENT_NAME=aiori_2
+    ports:
+      - "9102:9102"  # Changed port to avoid conflict
+    depends_on:
+      - nats
+      - server
+    networks:
+      - aiori-net
+    working_dir: /app
+
+volumes:
+  redis-data:
+
+networks:
+  aiori-net:
+    driver: bridge

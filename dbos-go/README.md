@@ -1,4 +1,4 @@
-# DBOS - Distributed Business Operating System
+# DBOS - Distributed Background Operation Service
 
 A high-performance Go-based service for managing runtime state, measurement results, and control-plane coordination for the Internet Measurement Network system.
 
@@ -25,6 +25,44 @@ The DBOS service is designed as a separate microservice that communicates with t
 Python Server ←→ gRPC ←→ DBOS Service ←→ Redis
 ```
 
+## Enhanced Durability & Reliability Features
+
+### 1. Idempotency Keys (Prevent Duplicate Results)
+- Prevents double storage of results
+- Prevents reprocessing of the same measurement request
+- Protects from duplicate agent outputs
+- Uses Redis SET with 24-hour expiration to track processed request IDs
+
+### 2. State Versioning (Optimistic Concurrency)
+- Each module state has a version number that increments with each update
+- Prevents race conditions with optimistic concurrency control
+- Conflicting updates are rejected with version mismatch errors
+
+### 3. Strong State Ordering
+- Validates state transitions to prevent invalid sequences
+- Only allows valid transitions: created → started → running → completed/error/failed
+- Prevents invalid transitions like completed → running
+
+### 4. Durable Event Log
+- Lightweight append-only event logging for debugging and auditing
+- Stores events in Redis lists for easy retrieval
+- Records key operations like task scheduling, result storage, state changes
+
+### 5. Visibility Timeouts for Task Queue
+- Reliable task processing with visibility timeouts
+- Three-state task system: pending → inflight → completed/failed
+- Automatic requeuing of expired tasks with retry handling
+- Dead letter queue support for failed tasks
+
+### 6. Metadata-enriched Result Records
+- Extended result records with operational metadata
+- Fields: received_at, agent_start_time, agent_runtime_version, module_revision, dbos_server_id, ingest_source
+- Provides better context for debugging and analysis
+
+### 7. Basic Audit Logging
+- Records key operations for compliance and debugging
+- Tracks result storage, state changes, task scheduling and execution
+
 ## API Endpoints
 
 ### Agent Management
@@ -46,6 +84,11 @@ Python Server ←→ gRPC ←→ DBOS Service ←→ Redis
 - ScheduleTask
 - GetTask
 - ListDueTasks
+- AckTask - Acknowledge successful task completion
+- NackTask - Negative acknowledge task (requeue with delay)
+
+### Event Logging
+- GetEvents - Retrieve recent events from the durable event log
 
 ## Setup
 

@@ -124,6 +124,7 @@ type ModuleState struct {
 	Details       map[string]string      `protobuf:"bytes,5,rep,name=details,proto3" json:"details,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Timestamp     int64                  `protobuf:"varint,6,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 	RequestId     string                 `protobuf:"bytes,7,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Version       int64                  `protobuf:"varint,8,opt,name=version,proto3" json:"version,omitempty"` // For optimistic concurrency control
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -207,16 +208,29 @@ func (x *ModuleState) GetRequestId() string {
 	return ""
 }
 
+func (x *ModuleState) GetVersion() int64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
 // MeasurementResult represents a network measurement result
 type MeasurementResult struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	AgentId       string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
-	ModuleName    string                 `protobuf:"bytes,3,opt,name=module_name,json=moduleName,proto3" json:"module_name,omitempty"`
-	Data          []byte                 `protobuf:"bytes,4,opt,name=data,proto3" json:"data,omitempty"` // JSON-encoded result data
-	Timestamp     int64                  `protobuf:"varint,5,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Id                  string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	AgentId             string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	ModuleName          string                 `protobuf:"bytes,3,opt,name=module_name,json=moduleName,proto3" json:"module_name,omitempty"`
+	Data                []byte                 `protobuf:"bytes,4,opt,name=data,proto3" json:"data,omitempty"` // JSON-encoded result data
+	Timestamp           int64                  `protobuf:"varint,5,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	ReceivedAt          int64                  `protobuf:"varint,6,opt,name=received_at,json=receivedAt,proto3" json:"received_at,omitempty"`                             // When the result was received
+	AgentStartTime      int64                  `protobuf:"varint,7,opt,name=agent_start_time,json=agentStartTime,proto3" json:"agent_start_time,omitempty"`               // When the agent started
+	AgentRuntimeVersion string                 `protobuf:"bytes,8,opt,name=agent_runtime_version,json=agentRuntimeVersion,proto3" json:"agent_runtime_version,omitempty"` // Agent runtime version
+	ModuleRevision      string                 `protobuf:"bytes,9,opt,name=module_revision,json=moduleRevision,proto3" json:"module_revision,omitempty"`                  // Module revision
+	DbosServerId        string                 `protobuf:"bytes,10,opt,name=dbos_server_id,json=dbosServerId,proto3" json:"dbos_server_id,omitempty"`                     // DBOS server ID
+	IngestSource        string                 `protobuf:"bytes,11,opt,name=ingest_source,json=ingestSource,proto3" json:"ingest_source,omitempty"`                       // Source of the ingestion
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *MeasurementResult) Reset() {
@@ -284,18 +298,62 @@ func (x *MeasurementResult) GetTimestamp() int64 {
 	return 0
 }
 
+func (x *MeasurementResult) GetReceivedAt() int64 {
+	if x != nil {
+		return x.ReceivedAt
+	}
+	return 0
+}
+
+func (x *MeasurementResult) GetAgentStartTime() int64 {
+	if x != nil {
+		return x.AgentStartTime
+	}
+	return 0
+}
+
+func (x *MeasurementResult) GetAgentRuntimeVersion() string {
+	if x != nil {
+		return x.AgentRuntimeVersion
+	}
+	return ""
+}
+
+func (x *MeasurementResult) GetModuleRevision() string {
+	if x != nil {
+		return x.ModuleRevision
+	}
+	return ""
+}
+
+func (x *MeasurementResult) GetDbosServerId() string {
+	if x != nil {
+		return x.DbosServerId
+	}
+	return ""
+}
+
+func (x *MeasurementResult) GetIngestSource() string {
+	if x != nil {
+		return x.IngestSource
+	}
+	return ""
+}
+
 // Task represents a scheduled task
 type Task struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	AgentId       string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
-	ModuleName    string                 `protobuf:"bytes,3,opt,name=module_name,json=moduleName,proto3" json:"module_name,omitempty"`
-	Payload       []byte                 `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"` // JSON-encoded task payload
-	ScheduledAt   int64                  `protobuf:"varint,5,opt,name=scheduled_at,json=scheduledAt,proto3" json:"scheduled_at,omitempty"`
-	CreatedAt     int64                  `protobuf:"varint,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	Status        string                 `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	AgentId        string                 `protobuf:"bytes,2,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
+	ModuleName     string                 `protobuf:"bytes,3,opt,name=module_name,json=moduleName,proto3" json:"module_name,omitempty"`
+	Payload        []byte                 `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"` // JSON-encoded task payload
+	ScheduledAt    int64                  `protobuf:"varint,5,opt,name=scheduled_at,json=scheduledAt,proto3" json:"scheduled_at,omitempty"`
+	CreatedAt      int64                  `protobuf:"varint,6,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	Status         string                 `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`
+	VisibilityTime int64                  `protobuf:"varint,8,opt,name=visibility_time,json=visibilityTime,proto3" json:"visibility_time,omitempty"` // For visibility timeout
+	RetryCount     int32                  `protobuf:"varint,9,opt,name=retry_count,json=retryCount,proto3" json:"retry_count,omitempty"`             // For retry handling
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Task) Reset() {
@@ -375,6 +433,20 @@ func (x *Task) GetStatus() string {
 		return x.Status
 	}
 	return ""
+}
+
+func (x *Task) GetVisibilityTime() int64 {
+	if x != nil {
+		return x.VisibilityTime
+	}
+	return 0
+}
+
+func (x *Task) GetRetryCount() int32 {
+	if x != nil {
+		return x.RetryCount
+	}
+	return 0
 }
 
 // Agent Management Requests
@@ -1573,6 +1645,303 @@ func (x *ListDueTasksResponse) GetError() string {
 	return ""
 }
 
+type AckTaskRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AckTaskRequest) Reset() {
+	*x = AckTaskRequest{}
+	mi := &file_api_dbos_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AckTaskRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AckTaskRequest) ProtoMessage() {}
+
+func (x *AckTaskRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_dbos_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AckTaskRequest.ProtoReflect.Descriptor instead.
+func (*AckTaskRequest) Descriptor() ([]byte, []int) {
+	return file_api_dbos_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *AckTaskRequest) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+type AckTaskResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AckTaskResponse) Reset() {
+	*x = AckTaskResponse{}
+	mi := &file_api_dbos_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AckTaskResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AckTaskResponse) ProtoMessage() {}
+
+func (x *AckTaskResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_dbos_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AckTaskResponse.ProtoReflect.Descriptor instead.
+func (*AckTaskResponse) Descriptor() ([]byte, []int) {
+	return file_api_dbos_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *AckTaskResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *AckTaskResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type NackTaskRequest struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	TaskId            string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	RetryDelaySeconds int64                  `protobuf:"varint,2,opt,name=retry_delay_seconds,json=retryDelaySeconds,proto3" json:"retry_delay_seconds,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *NackTaskRequest) Reset() {
+	*x = NackTaskRequest{}
+	mi := &file_api_dbos_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NackTaskRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NackTaskRequest) ProtoMessage() {}
+
+func (x *NackTaskRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_dbos_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NackTaskRequest.ProtoReflect.Descriptor instead.
+func (*NackTaskRequest) Descriptor() ([]byte, []int) {
+	return file_api_dbos_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *NackTaskRequest) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *NackTaskRequest) GetRetryDelaySeconds() int64 {
+	if x != nil {
+		return x.RetryDelaySeconds
+	}
+	return 0
+}
+
+type NackTaskResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NackTaskResponse) Reset() {
+	*x = NackTaskResponse{}
+	mi := &file_api_dbos_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NackTaskResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NackTaskResponse) ProtoMessage() {}
+
+func (x *NackTaskResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_dbos_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NackTaskResponse.ProtoReflect.Descriptor instead.
+func (*NackTaskResponse) Descriptor() ([]byte, []int) {
+	return file_api_dbos_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *NackTaskResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *NackTaskResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// Event Logging Requests
+type GetEventsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Limit         int64                  `protobuf:"varint,1,opt,name=limit,proto3" json:"limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetEventsRequest) Reset() {
+	*x = GetEventsRequest{}
+	mi := &file_api_dbos_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetEventsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetEventsRequest) ProtoMessage() {}
+
+func (x *GetEventsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_dbos_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetEventsRequest.ProtoReflect.Descriptor instead.
+func (*GetEventsRequest) Descriptor() ([]byte, []int) {
+	return file_api_dbos_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *GetEventsRequest) GetLimit() int64 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+type GetEventsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Events        [][]byte               `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetEventsResponse) Reset() {
+	*x = GetEventsResponse{}
+	mi := &file_api_dbos_proto_msgTypes[33]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetEventsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetEventsResponse) ProtoMessage() {}
+
+func (x *GetEventsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_dbos_proto_msgTypes[33]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetEventsResponse.ProtoReflect.Descriptor instead.
+func (*GetEventsResponse) Descriptor() ([]byte, []int) {
+	return file_api_dbos_proto_rawDescGZIP(), []int{33}
+}
+
+func (x *GetEventsResponse) GetEvents() [][]byte {
+	if x != nil {
+		return x.Events
+	}
+	return nil
+}
+
+func (x *GetEventsResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_api_dbos_proto protoreflect.FileDescriptor
 
 const file_api_dbos_proto_rawDesc = "" +
@@ -1589,7 +1958,7 @@ const file_api_dbos_proto_rawDesc = "" +
 	"\x10total_heartbeats\x18\a \x01(\x05R\x0ftotalHeartbeats\x1a9\n" +
 	"\vConfigEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb7\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd1\x02\n" +
 	"\vModuleState\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1f\n" +
 	"\vmodule_name\x18\x02 \x01(\tR\n" +
@@ -1599,17 +1968,26 @@ const file_api_dbos_proto_rawDesc = "" +
 	"\adetails\x18\x05 \x03(\v2\x1e.dbos.ModuleState.DetailsEntryR\adetails\x12\x1c\n" +
 	"\ttimestamp\x18\x06 \x01(\x03R\ttimestamp\x12\x1d\n" +
 	"\n" +
-	"request_id\x18\a \x01(\tR\trequestId\x1a:\n" +
+	"request_id\x18\a \x01(\tR\trequestId\x12\x18\n" +
+	"\aversion\x18\b \x01(\x03R\aversion\x1a:\n" +
 	"\fDetailsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x91\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x84\x03\n" +
 	"\x11MeasurementResult\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x1f\n" +
 	"\vmodule_name\x18\x03 \x01(\tR\n" +
 	"moduleName\x12\x12\n" +
 	"\x04data\x18\x04 \x01(\fR\x04data\x12\x1c\n" +
-	"\ttimestamp\x18\x05 \x01(\x03R\ttimestamp\"\xc6\x01\n" +
+	"\ttimestamp\x18\x05 \x01(\x03R\ttimestamp\x12\x1f\n" +
+	"\vreceived_at\x18\x06 \x01(\x03R\n" +
+	"receivedAt\x12(\n" +
+	"\x10agent_start_time\x18\a \x01(\x03R\x0eagentStartTime\x122\n" +
+	"\x15agent_runtime_version\x18\b \x01(\tR\x13agentRuntimeVersion\x12'\n" +
+	"\x0fmodule_revision\x18\t \x01(\tR\x0emoduleRevision\x12$\n" +
+	"\x0edbos_server_id\x18\n" +
+	" \x01(\tR\fdbosServerId\x12#\n" +
+	"\ringest_source\x18\v \x01(\tR\fingestSource\"\x90\x02\n" +
 	"\x04Task\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x1f\n" +
@@ -1619,7 +1997,10 @@ const file_api_dbos_proto_rawDesc = "" +
 	"\fscheduled_at\x18\x05 \x01(\x03R\vscheduledAt\x12\x1d\n" +
 	"\n" +
 	"created_at\x18\x06 \x01(\x03R\tcreatedAt\x12\x16\n" +
-	"\x06status\x18\a \x01(\tR\x06status\"9\n" +
+	"\x06status\x18\a \x01(\tR\x06status\x12'\n" +
+	"\x0fvisibility_time\x18\b \x01(\x03R\x0evisibilityTime\x12\x1f\n" +
+	"\vretry_count\x18\t \x01(\x05R\n" +
+	"retryCount\"9\n" +
 	"\x14RegisterAgentRequest\x12!\n" +
 	"\x05agent\x18\x01 \x01(\v2\v.dbos.AgentR\x05agent\"G\n" +
 	"\x15RegisterAgentResponse\x12\x18\n" +
@@ -1690,7 +2071,23 @@ const file_api_dbos_proto_rawDesc = "" +
 	"\x14ListDueTasksResponse\x12 \n" +
 	"\x05tasks\x18\x01 \x03(\v2\n" +
 	".dbos.TaskR\x05tasks\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error2\xc5\x06\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\")\n" +
+	"\x0eAckTaskRequest\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\"A\n" +
+	"\x0fAckTaskResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"Z\n" +
+	"\x0fNackTaskRequest\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\x12.\n" +
+	"\x13retry_delay_seconds\x18\x02 \x01(\x03R\x11retryDelaySeconds\"B\n" +
+	"\x10NackTaskResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"(\n" +
+	"\x10GetEventsRequest\x12\x14\n" +
+	"\x05limit\x18\x01 \x01(\x03R\x05limit\"A\n" +
+	"\x11GetEventsResponse\x12\x16\n" +
+	"\x06events\x18\x01 \x03(\fR\x06events\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error2\xf6\a\n" +
 	"\x04DBOS\x12H\n" +
 	"\rRegisterAgent\x12\x1a.dbos.RegisterAgentRequest\x1a\x1b.dbos.RegisterAgentResponse\x129\n" +
 	"\bGetAgent\x12\x15.dbos.GetAgentRequest\x1a\x16.dbos.GetAgentResponse\x12?\n" +
@@ -1704,7 +2101,10 @@ const file_api_dbos_proto_rawDesc = "" +
 	"\vListResults\x12\x18.dbos.ListResultsRequest\x1a\x19.dbos.ListResultsResponse\x12E\n" +
 	"\fScheduleTask\x12\x19.dbos.ScheduleTaskRequest\x1a\x1a.dbos.ScheduleTaskResponse\x126\n" +
 	"\aGetTask\x12\x14.dbos.GetTaskRequest\x1a\x15.dbos.GetTaskResponse\x12E\n" +
-	"\fListDueTasks\x12\x19.dbos.ListDueTasksRequest\x1a\x1a.dbos.ListDueTasksResponseB\aZ\x05./apib\x06proto3"
+	"\fListDueTasks\x12\x19.dbos.ListDueTasksRequest\x1a\x1a.dbos.ListDueTasksResponse\x126\n" +
+	"\aAckTask\x12\x14.dbos.AckTaskRequest\x1a\x15.dbos.AckTaskResponse\x129\n" +
+	"\bNackTask\x12\x15.dbos.NackTaskRequest\x1a\x16.dbos.NackTaskResponse\x12<\n" +
+	"\tGetEvents\x12\x16.dbos.GetEventsRequest\x1a\x17.dbos.GetEventsResponseB\aZ\x05./apib\x06proto3"
 
 var (
 	file_api_dbos_proto_rawDescOnce sync.Once
@@ -1718,7 +2118,7 @@ func file_api_dbos_proto_rawDescGZIP() []byte {
 	return file_api_dbos_proto_rawDescData
 }
 
-var file_api_dbos_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_api_dbos_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
 var file_api_dbos_proto_goTypes = []any{
 	(*Agent)(nil),                    // 0: dbos.Agent
 	(*ModuleState)(nil),              // 1: dbos.ModuleState
@@ -1748,12 +2148,18 @@ var file_api_dbos_proto_goTypes = []any{
 	(*GetTaskResponse)(nil),          // 25: dbos.GetTaskResponse
 	(*ListDueTasksRequest)(nil),      // 26: dbos.ListDueTasksRequest
 	(*ListDueTasksResponse)(nil),     // 27: dbos.ListDueTasksResponse
-	nil,                              // 28: dbos.Agent.ConfigEntry
-	nil,                              // 29: dbos.ModuleState.DetailsEntry
+	(*AckTaskRequest)(nil),           // 28: dbos.AckTaskRequest
+	(*AckTaskResponse)(nil),          // 29: dbos.AckTaskResponse
+	(*NackTaskRequest)(nil),          // 30: dbos.NackTaskRequest
+	(*NackTaskResponse)(nil),         // 31: dbos.NackTaskResponse
+	(*GetEventsRequest)(nil),         // 32: dbos.GetEventsRequest
+	(*GetEventsResponse)(nil),        // 33: dbos.GetEventsResponse
+	nil,                              // 34: dbos.Agent.ConfigEntry
+	nil,                              // 35: dbos.ModuleState.DetailsEntry
 }
 var file_api_dbos_proto_depIdxs = []int32{
-	28, // 0: dbos.Agent.config:type_name -> dbos.Agent.ConfigEntry
-	29, // 1: dbos.ModuleState.details:type_name -> dbos.ModuleState.DetailsEntry
+	34, // 0: dbos.Agent.config:type_name -> dbos.Agent.ConfigEntry
+	35, // 1: dbos.ModuleState.details:type_name -> dbos.ModuleState.DetailsEntry
 	0,  // 2: dbos.RegisterAgentRequest.agent:type_name -> dbos.Agent
 	0,  // 3: dbos.GetAgentResponse.agent:type_name -> dbos.Agent
 	0,  // 4: dbos.ListAgentsResponse.agents:type_name -> dbos.Agent
@@ -1778,20 +2184,26 @@ var file_api_dbos_proto_depIdxs = []int32{
 	22, // 23: dbos.DBOS.ScheduleTask:input_type -> dbos.ScheduleTaskRequest
 	24, // 24: dbos.DBOS.GetTask:input_type -> dbos.GetTaskRequest
 	26, // 25: dbos.DBOS.ListDueTasks:input_type -> dbos.ListDueTasksRequest
-	5,  // 26: dbos.DBOS.RegisterAgent:output_type -> dbos.RegisterAgentResponse
-	7,  // 27: dbos.DBOS.GetAgent:output_type -> dbos.GetAgentResponse
-	9,  // 28: dbos.DBOS.ListAgents:output_type -> dbos.ListAgentsResponse
-	11, // 29: dbos.DBOS.SetModuleState:output_type -> dbos.SetModuleStateResponse
-	13, // 30: dbos.DBOS.GetModuleState:output_type -> dbos.GetModuleStateResponse
-	15, // 31: dbos.DBOS.ListModuleStates:output_type -> dbos.ListModuleStatesResponse
-	17, // 32: dbos.DBOS.StoreResult:output_type -> dbos.StoreResultResponse
-	19, // 33: dbos.DBOS.GetResult:output_type -> dbos.GetResultResponse
-	21, // 34: dbos.DBOS.ListResults:output_type -> dbos.ListResultsResponse
-	23, // 35: dbos.DBOS.ScheduleTask:output_type -> dbos.ScheduleTaskResponse
-	25, // 36: dbos.DBOS.GetTask:output_type -> dbos.GetTaskResponse
-	27, // 37: dbos.DBOS.ListDueTasks:output_type -> dbos.ListDueTasksResponse
-	26, // [26:38] is the sub-list for method output_type
-	14, // [14:26] is the sub-list for method input_type
+	28, // 26: dbos.DBOS.AckTask:input_type -> dbos.AckTaskRequest
+	30, // 27: dbos.DBOS.NackTask:input_type -> dbos.NackTaskRequest
+	32, // 28: dbos.DBOS.GetEvents:input_type -> dbos.GetEventsRequest
+	5,  // 29: dbos.DBOS.RegisterAgent:output_type -> dbos.RegisterAgentResponse
+	7,  // 30: dbos.DBOS.GetAgent:output_type -> dbos.GetAgentResponse
+	9,  // 31: dbos.DBOS.ListAgents:output_type -> dbos.ListAgentsResponse
+	11, // 32: dbos.DBOS.SetModuleState:output_type -> dbos.SetModuleStateResponse
+	13, // 33: dbos.DBOS.GetModuleState:output_type -> dbos.GetModuleStateResponse
+	15, // 34: dbos.DBOS.ListModuleStates:output_type -> dbos.ListModuleStatesResponse
+	17, // 35: dbos.DBOS.StoreResult:output_type -> dbos.StoreResultResponse
+	19, // 36: dbos.DBOS.GetResult:output_type -> dbos.GetResultResponse
+	21, // 37: dbos.DBOS.ListResults:output_type -> dbos.ListResultsResponse
+	23, // 38: dbos.DBOS.ScheduleTask:output_type -> dbos.ScheduleTaskResponse
+	25, // 39: dbos.DBOS.GetTask:output_type -> dbos.GetTaskResponse
+	27, // 40: dbos.DBOS.ListDueTasks:output_type -> dbos.ListDueTasksResponse
+	29, // 41: dbos.DBOS.AckTask:output_type -> dbos.AckTaskResponse
+	31, // 42: dbos.DBOS.NackTask:output_type -> dbos.NackTaskResponse
+	33, // 43: dbos.DBOS.GetEvents:output_type -> dbos.GetEventsResponse
+	29, // [29:44] is the sub-list for method output_type
+	14, // [14:29] is the sub-list for method input_type
 	14, // [14:14] is the sub-list for extension type_name
 	14, // [14:14] is the sub-list for extension extendee
 	0,  // [0:14] is the sub-list for field type_name
@@ -1808,7 +2220,7 @@ func file_api_dbos_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_dbos_proto_rawDesc), len(file_api_dbos_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   30,
+			NumMessages:   36,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

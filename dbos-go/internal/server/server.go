@@ -27,6 +27,7 @@ type Server struct {
 	moduleStateStore *store.ModuleStateStore
 	resultStore      *store.ResultStore
 	taskStore        *store.TaskStore
+	redisClient      *redis.Client
 }
 
 // NewServer creates a new DBOS server with OpenTelemetry instrumentation
@@ -48,6 +49,7 @@ func NewServer(redisAddr string) *Server {
 		moduleStateStore: moduleStateStore,
 		resultStore:      resultStore,
 		taskStore:        taskStore,
+		redisClient:      redisClient,
 	}
 }
 
@@ -195,15 +197,35 @@ func (s *Server) SetModuleState(ctx context.Context, req *api.SetModuleStateRequ
 		Details:      req.State.Details,
 		Timestamp:    time.Unix(req.State.Timestamp, 0),
 		RequestID:    req.State.RequestId,
+		Version:      req.State.Version,
 	}
 
 	err := s.moduleStateStore.SetModuleState(ctx, state)
 	if err != nil {
+		// Log the error event
+		s.redisClient.LogEvent(ctx, "module_state_error", "Failed to set module state", map[string]interface{}{
+			"agent_id":    req.State.AgentId,
+			"module_name": req.State.ModuleName,
+			"state":       req.State.State,
+			"request_id":  req.State.RequestId,
+			"error":       err.Error(),
+		})
+
 		return &api.SetModuleStateResponse{
 			Success: false,
 			Error:   err.Error(),
 		}, nil
 	}
+
+	// Log the successful state update event
+	s.redisClient.LogEvent(ctx, "module_state_updated", "Module state updated successfully", map[string]interface{}{
+		"agent_id":    req.State.AgentId,
+		"module_name": req.State.ModuleName,
+		"state":       req.State.State,
+		"request_id":  req.State.RequestId,
+		"timestamp":   req.State.Timestamp,
+		"version":     state.Version,
+	})
 
 	return &api.SetModuleStateResponse{
 		Success: true,
@@ -230,6 +252,7 @@ func (s *Server) GetModuleState(ctx context.Context, req *api.GetModuleStateRequ
 			Details:      state.Details,
 			Timestamp:    state.Timestamp.Unix(),
 			RequestId:    state.RequestID,
+			Version:      state.Version,
 		},
 	}, nil
 }
@@ -253,6 +276,7 @@ func (s *Server) ListModuleStates(ctx context.Context, req *api.ListModuleStates
 			Details:      state.Details,
 			Timestamp:    state.Timestamp.Unix(),
 			RequestId:    state.RequestID,
+			Version:      state.Version,
 		}
 	}
 
@@ -264,20 +288,42 @@ func (s *Server) ListModuleStates(ctx context.Context, req *api.ListModuleStates
 // StoreResult stores a measurement result
 func (s *Server) StoreResult(ctx context.Context, req *api.StoreResultRequest) (*api.StoreResultResponse, error) {
 	result := &models.MeasurementResult{
-		ID:         req.Result.Id,
-		AgentID:    req.Result.AgentId,
-		ModuleName: req.Result.ModuleName,
-		Data:       req.Result.Data,
-		Timestamp:  time.Unix(req.Result.Timestamp, 0),
+		ID:                  req.Result.Id,
+		AgentID:             req.Result.AgentId,
+		ModuleName:          req.Result.ModuleName,
+		Data:                req.Result.Data,
+		Timestamp:           time.Unix(req.Result.Timestamp, 0),
+		ReceivedAt:          time.Unix(req.Result.ReceivedAt, 0),
+		AgentStartTime:      time.Unix(req.Result.AgentStartTime, 0),
+		AgentRuntimeVersion: req.Result.AgentRuntimeVersion,
+		ModuleRevision:      req.Result.ModuleRevision,
+		DBOSServerID:        req.Result.DbosServerId,
+		IngestSource:        req.Result.IngestSource,
 	}
 
 	err := s.resultStore.StoreResult(ctx, result)
 	if err != nil {
+		// Log the error event
+		s.redisClient.LogEvent(ctx, "result_store_error", "Failed to store result", map[string]interface{}{
+			"agent_id":    req.Result.AgentId,
+			"request_id":  req.Result.Id,
+			"module_name": req.Result.ModuleName,
+			"error":       err.Error(),
+		})
+
 		return &api.StoreResultResponse{
 			Success: false,
 			Error:   err.Error(),
 		}, nil
 	}
+
+	// Log the successful storage event
+	s.redisClient.LogEvent(ctx, "result_stored", "Result stored successfully", map[string]interface{}{
+		"agent_id":    req.Result.AgentId,
+		"request_id":  req.Result.Id,
+		"module_name": req.Result.ModuleName,
+		"timestamp":   req.Result.Timestamp,
+	})
 
 	return &api.StoreResultResponse{
 		Success: true,
@@ -297,11 +343,17 @@ func (s *Server) GetResult(ctx context.Context, req *api.GetResultRequest) (*api
 	return &api.GetResultResponse{
 		Found: true,
 		Result: &api.MeasurementResult{
-			Id:         result.ID,
-			AgentId:    result.AgentID,
-			ModuleName: result.ModuleName,
-			Data:       result.Data,
-			Timestamp:  result.Timestamp.Unix(),
+			Id:                  result.ID,
+			AgentId:             result.AgentID,
+			ModuleName:          result.ModuleName,
+			Data:                result.Data,
+			Timestamp:           result.Timestamp.Unix(),
+			ReceivedAt:          result.ReceivedAt.Unix(),
+			AgentStartTime:      result.AgentStartTime.Unix(),
+			AgentRuntimeVersion: result.AgentRuntimeVersion,
+			ModuleRevision:      result.ModuleRevision,
+			DbosServerId:        result.DBOSServerID,
+			IngestSource:        result.IngestSource,
 		},
 	}, nil
 }
@@ -318,11 +370,17 @@ func (s *Server) ListResults(ctx context.Context, req *api.ListResultsRequest) (
 	apiResults := make([]*api.MeasurementResult, len(results))
 	for i, result := range results {
 		apiResults[i] = &api.MeasurementResult{
-			Id:         result.ID,
-			AgentId:    result.AgentID,
-			ModuleName: result.ModuleName,
-			Data:       result.Data,
-			Timestamp:  result.Timestamp.Unix(),
+			Id:                  result.ID,
+			AgentId:             result.AgentID,
+			ModuleName:          result.ModuleName,
+			Data:                result.Data,
+			Timestamp:           result.Timestamp.Unix(),
+			ReceivedAt:          result.ReceivedAt.Unix(),
+			AgentStartTime:      result.AgentStartTime.Unix(),
+			AgentRuntimeVersion: result.AgentRuntimeVersion,
+			ModuleRevision:      result.ModuleRevision,
+			DbosServerId:        result.DBOSServerID,
+			IngestSource:        result.IngestSource,
 		}
 	}
 
@@ -334,22 +392,41 @@ func (s *Server) ListResults(ctx context.Context, req *api.ListResultsRequest) (
 // ScheduleTask schedules a task
 func (s *Server) ScheduleTask(ctx context.Context, req *api.ScheduleTaskRequest) (*api.ScheduleTaskResponse, error) {
 	task := &models.Task{
-		ID:          req.Task.Id,
-		AgentID:     req.Task.AgentId,
-		ModuleName:  req.Task.ModuleName,
-		Payload:     req.Task.Payload,
-		ScheduledAt: time.Unix(req.Task.ScheduledAt, 0),
-		CreatedAt:   time.Unix(req.Task.CreatedAt, 0),
-		Status:      req.Task.Status,
+		ID:             req.Task.Id,
+		AgentID:        req.Task.AgentId,
+		ModuleName:     req.Task.ModuleName,
+		Payload:        req.Task.Payload,
+		ScheduledAt:    time.Unix(req.Task.ScheduledAt, 0),
+		CreatedAt:      time.Unix(req.Task.CreatedAt, 0),
+		Status:         req.Task.Status,
+		VisibilityTime: time.Unix(req.Task.VisibilityTime, 0),
+		RetryCount:     int(req.Task.RetryCount),
 	}
 
 	err := s.taskStore.ScheduleTask(ctx, task)
 	if err != nil {
+		// Log the error event
+		s.redisClient.LogEvent(ctx, "task_schedule_error", "Failed to schedule task", map[string]interface{}{
+			"task_id":     req.Task.Id,
+			"agent_id":    req.Task.AgentId,
+			"module_name": req.Task.ModuleName,
+			"error":       err.Error(),
+		})
+
 		return &api.ScheduleTaskResponse{
 			Success: false,
 			Error:   err.Error(),
 		}, nil
 	}
+
+	// Log the successful scheduling event
+	s.redisClient.LogEvent(ctx, "task_scheduled", "Task scheduled successfully", map[string]interface{}{
+		"task_id":      req.Task.Id,
+		"agent_id":     req.Task.AgentId,
+		"module_name":  req.Task.ModuleName,
+		"scheduled_at": req.Task.ScheduledAt,
+		"created_at":   req.Task.CreatedAt,
+	})
 
 	return &api.ScheduleTaskResponse{
 		Success: true,
@@ -369,13 +446,15 @@ func (s *Server) GetTask(ctx context.Context, req *api.GetTaskRequest) (*api.Get
 	return &api.GetTaskResponse{
 		Found: true,
 		Task: &api.Task{
-			Id:          task.ID,
-			AgentId:     task.AgentID,
-			ModuleName:  task.ModuleName,
-			Payload:     task.Payload,
-			ScheduledAt: task.ScheduledAt.Unix(),
-			CreatedAt:   task.CreatedAt.Unix(),
-			Status:      task.Status,
+			Id:             task.ID,
+			AgentId:        task.AgentID,
+			ModuleName:     task.ModuleName,
+			Payload:        task.Payload,
+			ScheduledAt:    task.ScheduledAt.Unix(),
+			CreatedAt:      task.CreatedAt.Unix(),
+			Status:         task.Status,
+			VisibilityTime: task.VisibilityTime.Unix(),
+			RetryCount:     int32(task.RetryCount),
 		},
 	}, nil
 }
@@ -384,6 +463,11 @@ func (s *Server) GetTask(ctx context.Context, req *api.GetTaskRequest) (*api.Get
 func (s *Server) ListDueTasks(ctx context.Context, req *api.ListDueTasksRequest) (*api.ListDueTasksResponse, error) {
 	tasks, err := s.taskStore.ListDueTasks(ctx, time.Unix(req.Timestamp, 0))
 	if err != nil {
+		// Log the error event
+		s.redisClient.LogEvent(ctx, "task_list_error", "Failed to list due tasks", map[string]interface{}{
+			"error": err.Error(),
+		})
+
 		return &api.ListDueTasksResponse{
 			Error: err.Error(),
 		}, nil
@@ -392,17 +476,93 @@ func (s *Server) ListDueTasks(ctx context.Context, req *api.ListDueTasksRequest)
 	apiTasks := make([]*api.Task, len(tasks))
 	for i, task := range tasks {
 		apiTasks[i] = &api.Task{
-			Id:          task.ID,
-			AgentId:     task.AgentID,
-			ModuleName:  task.ModuleName,
-			Payload:     task.Payload,
-			ScheduledAt: task.ScheduledAt.Unix(),
-			CreatedAt:   task.CreatedAt.Unix(),
-			Status:      task.Status,
+			Id:             task.ID,
+			AgentId:        task.AgentID,
+			ModuleName:     task.ModuleName,
+			Payload:        task.Payload,
+			ScheduledAt:    task.ScheduledAt.Unix(),
+			CreatedAt:      task.CreatedAt.Unix(),
+			Status:         task.Status,
+			VisibilityTime: task.VisibilityTime.Unix(),
+			RetryCount:     int32(task.RetryCount),
 		}
 	}
 
+	// Log the successful retrieval event
+	s.redisClient.LogEvent(ctx, "tasks_retrieved", "Due tasks retrieved successfully", map[string]interface{}{
+		"count":     len(tasks),
+		"timestamp": req.Timestamp,
+	})
+
 	return &api.ListDueTasksResponse{
 		Tasks: apiTasks,
+	}, nil
+}
+
+// AckTask acknowledges completion of a task
+func (s *Server) AckTask(ctx context.Context, req *api.AckTaskRequest) (*api.AckTaskResponse, error) {
+	err := s.taskStore.AckTask(ctx, req.TaskId)
+	if err != nil {
+		// Log the error event
+		s.redisClient.LogEvent(ctx, "task_ack_error", "Failed to acknowledge task", map[string]interface{}{
+			"task_id": req.TaskId,
+			"error":   err.Error(),
+		})
+
+		return &api.AckTaskResponse{
+			Success: false,
+			Error:   err.Error(),
+		}, nil
+	}
+
+	// Log the successful acknowledgment event
+	s.redisClient.LogEvent(ctx, "task_acknowledged", "Task acknowledged successfully", map[string]interface{}{
+		"task_id": req.TaskId,
+	})
+
+	return &api.AckTaskResponse{
+		Success: true,
+	}, nil
+}
+
+// NackTask negatively acknowledges a task, moving it back to pending
+func (s *Server) NackTask(ctx context.Context, req *api.NackTaskRequest) (*api.NackTaskResponse, error) {
+	retryDelay := time.Duration(req.RetryDelaySeconds) * time.Second
+	err := s.taskStore.NackTask(ctx, req.TaskId, retryDelay)
+	if err != nil {
+		// Log the error event
+		s.redisClient.LogEvent(ctx, "task_nack_error", "Failed to nack task", map[string]interface{}{
+			"task_id": req.TaskId,
+			"error":   err.Error(),
+		})
+
+		return &api.NackTaskResponse{
+			Success: false,
+			Error:   err.Error(),
+		}, nil
+	}
+
+	// Log the successful negative acknowledgment event
+	s.redisClient.LogEvent(ctx, "task_nacked", "Task nacked successfully", map[string]interface{}{
+		"task_id":             req.TaskId,
+		"retry_delay_seconds": req.RetryDelaySeconds,
+	})
+
+	return &api.NackTaskResponse{
+		Success: true,
+	}, nil
+}
+
+// GetEvents retrieves recent events from the event log
+func (s *Server) GetEvents(ctx context.Context, req *api.GetEventsRequest) (*api.GetEventsResponse, error) {
+	events, err := s.redisClient.GetEvents(ctx, req.Limit)
+	if err != nil {
+		return &api.GetEventsResponse{
+			Error: err.Error(),
+		}, nil
+	}
+
+	return &api.GetEventsResponse{
+		Events: events,
 	}, nil
 }

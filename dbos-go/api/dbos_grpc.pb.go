@@ -31,6 +31,9 @@ const (
 	DBOS_ScheduleTask_FullMethodName     = "/dbos.DBOS/ScheduleTask"
 	DBOS_GetTask_FullMethodName          = "/dbos.DBOS/GetTask"
 	DBOS_ListDueTasks_FullMethodName     = "/dbos.DBOS/ListDueTasks"
+	DBOS_AckTask_FullMethodName          = "/dbos.DBOS/AckTask"
+	DBOS_NackTask_FullMethodName         = "/dbos.DBOS/NackTask"
+	DBOS_GetEvents_FullMethodName        = "/dbos.DBOS/GetEvents"
 )
 
 // DBOSClient is the client API for DBOS service.
@@ -55,6 +58,10 @@ type DBOSClient interface {
 	ScheduleTask(ctx context.Context, in *ScheduleTaskRequest, opts ...grpc.CallOption) (*ScheduleTaskResponse, error)
 	GetTask(ctx context.Context, in *GetTaskRequest, opts ...grpc.CallOption) (*GetTaskResponse, error)
 	ListDueTasks(ctx context.Context, in *ListDueTasksRequest, opts ...grpc.CallOption) (*ListDueTasksResponse, error)
+	AckTask(ctx context.Context, in *AckTaskRequest, opts ...grpc.CallOption) (*AckTaskResponse, error)
+	NackTask(ctx context.Context, in *NackTaskRequest, opts ...grpc.CallOption) (*NackTaskResponse, error)
+	// Event Logging
+	GetEvents(ctx context.Context, in *GetEventsRequest, opts ...grpc.CallOption) (*GetEventsResponse, error)
 }
 
 type dBOSClient struct {
@@ -185,6 +192,36 @@ func (c *dBOSClient) ListDueTasks(ctx context.Context, in *ListDueTasksRequest, 
 	return out, nil
 }
 
+func (c *dBOSClient) AckTask(ctx context.Context, in *AckTaskRequest, opts ...grpc.CallOption) (*AckTaskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AckTaskResponse)
+	err := c.cc.Invoke(ctx, DBOS_AckTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dBOSClient) NackTask(ctx context.Context, in *NackTaskRequest, opts ...grpc.CallOption) (*NackTaskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(NackTaskResponse)
+	err := c.cc.Invoke(ctx, DBOS_NackTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dBOSClient) GetEvents(ctx context.Context, in *GetEventsRequest, opts ...grpc.CallOption) (*GetEventsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetEventsResponse)
+	err := c.cc.Invoke(ctx, DBOS_GetEvents_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DBOSServer is the server API for DBOS service.
 // All implementations must embed UnimplementedDBOSServer
 // for forward compatibility.
@@ -207,6 +244,10 @@ type DBOSServer interface {
 	ScheduleTask(context.Context, *ScheduleTaskRequest) (*ScheduleTaskResponse, error)
 	GetTask(context.Context, *GetTaskRequest) (*GetTaskResponse, error)
 	ListDueTasks(context.Context, *ListDueTasksRequest) (*ListDueTasksResponse, error)
+	AckTask(context.Context, *AckTaskRequest) (*AckTaskResponse, error)
+	NackTask(context.Context, *NackTaskRequest) (*NackTaskResponse, error)
+	// Event Logging
+	GetEvents(context.Context, *GetEventsRequest) (*GetEventsResponse, error)
 	mustEmbedUnimplementedDBOSServer()
 }
 
@@ -252,6 +293,15 @@ func (UnimplementedDBOSServer) GetTask(context.Context, *GetTaskRequest) (*GetTa
 }
 func (UnimplementedDBOSServer) ListDueTasks(context.Context, *ListDueTasksRequest) (*ListDueTasksResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListDueTasks not implemented")
+}
+func (UnimplementedDBOSServer) AckTask(context.Context, *AckTaskRequest) (*AckTaskResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AckTask not implemented")
+}
+func (UnimplementedDBOSServer) NackTask(context.Context, *NackTaskRequest) (*NackTaskResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method NackTask not implemented")
+}
+func (UnimplementedDBOSServer) GetEvents(context.Context, *GetEventsRequest) (*GetEventsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetEvents not implemented")
 }
 func (UnimplementedDBOSServer) mustEmbedUnimplementedDBOSServer() {}
 func (UnimplementedDBOSServer) testEmbeddedByValue()              {}
@@ -490,6 +540,60 @@ func _DBOS_ListDueTasks_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DBOS_AckTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AckTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DBOSServer).AckTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DBOS_AckTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DBOSServer).AckTask(ctx, req.(*AckTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DBOS_NackTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(NackTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DBOSServer).NackTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DBOS_NackTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DBOSServer).NackTask(ctx, req.(*NackTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DBOS_GetEvents_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetEventsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DBOSServer).GetEvents(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DBOS_GetEvents_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DBOSServer).GetEvents(ctx, req.(*GetEventsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DBOS_ServiceDesc is the grpc.ServiceDesc for DBOS service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -544,6 +648,18 @@ var DBOS_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListDueTasks",
 			Handler:    _DBOS_ListDueTasks_Handler,
+		},
+		{
+			MethodName: "AckTask",
+			Handler:    _DBOS_AckTask_Handler,
+		},
+		{
+			MethodName: "NackTask",
+			Handler:    _DBOS_NackTask_Handler,
+		},
+		{
+			MethodName: "GetEvents",
+			Handler:    _DBOS_GetEvents_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

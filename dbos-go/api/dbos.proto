@@ -24,6 +24,7 @@ message ModuleState {
   map<string, string> details = 5;
   int64 timestamp = 6;
   string request_id = 7;
+  int64 version = 8; // For optimistic concurrency control
 }
 
 // MeasurementResult represents a network measurement result
@@ -33,6 +34,12 @@ message MeasurementResult {
   string module_name = 3;
   bytes data = 4; // JSON-encoded result data
   int64 timestamp = 5;
+  int64 received_at = 6; // When the result was received
+  int64 agent_start_time = 7; // When the agent started
+  string agent_runtime_version = 8; // Agent runtime version
+  string module_revision = 9; // Module revision
+  string dbos_server_id = 10; // DBOS server ID
+  string ingest_source = 11; // Source of the ingestion
 }
 
 // Task represents a scheduled task
@@ -44,6 +51,8 @@ message Task {
   int64 scheduled_at = 5;
   int64 created_at = 6;
   string status = 7;
+  int64 visibility_time = 8; // For visibility timeout
+  int32 retry_count = 9; // For retry handling
 }
 
 // Agent Management Requests
@@ -162,6 +171,35 @@ message ListDueTasksResponse {
   string error = 2;
 }
 
+message AckTaskRequest {
+  string task_id = 1;
+}
+
+message AckTaskResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message NackTaskRequest {
+  string task_id = 1;
+  int64 retry_delay_seconds = 2;
+}
+
+message NackTaskResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// Event Logging Requests
+message GetEventsRequest {
+  int64 limit = 1;
+}
+
+message GetEventsResponse {
+  repeated bytes events = 1;
+  string error = 2;
+}
+
 // DBOS Service Definition
 service DBOS {
   // Agent Management
@@ -183,4 +221,9 @@ service DBOS {
   rpc ScheduleTask(ScheduleTaskRequest) returns (ScheduleTaskResponse);
   rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
   rpc ListDueTasks(ListDueTasksRequest) returns (ListDueTasksResponse);
+  rpc AckTask(AckTaskRequest) returns (AckTaskResponse);
+  rpc NackTask(NackTaskRequest) returns (NackTaskResponse);
+  
+  // Event Logging
+  rpc GetEvents(GetEventsRequest) returns (GetEventsResponse);
 }

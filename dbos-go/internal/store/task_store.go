@@ -41,9 +41,9 @@ func (s *TaskStore) GetTask(ctx context.Context, taskID string) (*models.Task, e
 	return &task, nil
 }
 
-// ListDueTasks retrieves all due tasks from the database
+// ListDueTasks retrieves all due tasks from the database with visibility timeout
 func (s *TaskStore) ListDueTasks(ctx context.Context, timestamp time.Time) ([]*models.Task, error) {
-	tasksData, err := s.redis.GetDueTasks(ctx, timestamp)
+	tasksData, err := s.redis.GetDueTasks(ctx, timestamp, 5*time.Minute) // 5-minute visibility timeout
 	if err != nil {
 		return nil, err
 	}
@@ -58,4 +58,19 @@ func (s *TaskStore) ListDueTasks(ctx context.Context, timestamp time.Time) ([]*m
 	}
 
 	return tasks, nil
+}
+
+// AckTask acknowledges completion of a task
+func (s *TaskStore) AckTask(ctx context.Context, taskID string) error {
+	return s.redis.AckTask(ctx, taskID)
+}
+
+// NackTask negatively acknowledges a task, moving it back to pending
+func (s *TaskStore) NackTask(ctx context.Context, taskID string, retryDelay time.Duration) error {
+	return s.redis.NackTask(ctx, taskID, retryDelay)
+}
+
+// RequeueExpiredTasks moves expired inflight tasks back to pending
+func (s *TaskStore) RequeueExpiredTasks(ctx context.Context, timestamp time.Time) error {
+	return s.redis.RequeueExpiredTasks(ctx, timestamp)
 }
