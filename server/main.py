@@ -152,7 +152,8 @@ async def nats_connect():
                 module_name=module_name,
                 state=state,
                 error_message=data.get("error_message"),
-                details=data.get("details")
+                details=data.get("details"),
+                request_id=request_id or ''
             )
             
             # Store in DBOS if enabled
@@ -160,8 +161,6 @@ async def nats_connect():
                 try:
                     from dbos_client import dbos_client
                     if dbos_client:
-                        # Add request_id to module_state for DBOS storage
-                        setattr(module_state, 'request_id', request_id or '')
                         success = await dbos_client.set_module_state(module_state)
                         if success:
                             print(f"[DBOS] Stored module state for {agent_id}.{module_name}")
@@ -414,12 +413,12 @@ async def get_agent_result(agent_id: str, request_id: str):
     return result
 
 
-@app.get("/agents/{agent_id}/results")
-async def get_agent_results(agent_id: str):
-    """
-    Get all results for a specific agent.
-    """
-    return results_cache.get(agent_id, {})
+# @app.get("/agents/{agent_id}/results")
+# async def get_agent_results(agent_id: str):
+#     """
+#     Get all results for a specific agent.
+#     """
+#     return results_cache.get(agent_id, {})
 
 
 @app.delete("/agents/{agent_id}/results/{request_id}")
@@ -505,13 +504,13 @@ async def run_module(
 #     raise HTTPException(status_code=404, detail="Module state tracking disabled")
 
 
-@app.get("/modules/states")
-async def get_all_module_states():
-    """
-    Get all module states across all agents.
-    """
-    # Return empty dict since we're no longer tracking module states
-    return {}
+# @app.get("/modules/states")
+# async def get_all_module_states():
+#     """
+#     Get all module states across all agents.
+#     """
+#     # Return empty dict since we're no longer tracking module states
+#     return {}
 
 
 @app.get("/modules/states/{request_id}")
@@ -537,3 +536,105 @@ async def get_module_state_by_request_id(request_id: str):
         raise HTTPException(status_code=404, detail="Module state not found for this request ID")
         
     return module_state.dict()
+
+
+@app.get("/modules/states/{request_id}/version")
+async def get_module_state_with_version(request_id: str):
+    """
+    Get module state with version for concurrency testing.
+    """
+    # Try to get from DBOS if enabled
+    if os.environ.get("USE_DBOS", "false").lower() == "true":
+        try:
+            from dbos_client import dbos_client
+            if dbos_client:
+                dbos_state = await dbos_client.get_module_state(request_id)
+                if dbos_state:
+                    return dbos_state
+        except Exception as e:
+            print(f"[DBOS] Error getting module state with version for request {request_id}: {e}")
+    
+    raise HTTPException(status_code=404, detail="Module state not found for this request ID")
+
+
+# @app.get("/modules/states/list/{agent_id}/{module_name}")
+# async def list_module_states(agent_id: str, module_name: str):
+#     """
+#     List all module states for a specific agent and module.
+#     """
+#     # Try to get from DBOS if enabled
+#     if os.environ.get("USE_DBOS", "false").lower() == "true":
+#         try:
+#             from dbos_client import dbos_client
+#             if dbos_client:
+#                 dbos_states = await dbos_client.list_module_states(agent_id, module_name)
+#                 return dbos_states
+#         except Exception as e:
+#             print(f"[DBOS] Error listing module states for agent {agent_id}, module {module_name}: {e}")
+    
+#     raise HTTPException(status_code=404, detail="Module states not found")
+
+
+@app.get("/tasks/{task_id}")
+async def get_task(task_id: str):
+    """
+    Get task details by ID.
+    """
+    # Try to get from DBOS if enabled
+    if os.environ.get("USE_DBOS", "false").lower() == "true":
+        try:
+            from dbos_client import dbos_client
+            if dbos_client:
+                task = await dbos_client.get_task(task_id)
+                if task:
+                    return task
+        except Exception as e:
+            print(f"[DBOS] Error getting task {task_id}: {e}")
+    
+    raise HTTPException(status_code=404, detail="Task not found")
+
+
+@app.get("/events")
+async def get_events(limit: int = 100):
+    """
+    Get recent durable events.
+    """
+    # Try to get from DBOS if enabled
+    if os.environ.get("USE_DBOS", "false").lower() == "true":
+        try:
+            from dbos_client import dbos_client
+            import json
+            if dbos_client:
+                events = await dbos_client.get_events(limit)
+                # Parse the JSON events
+                parsed_events = []
+                for event_bytes in events:
+                    try:
+                        parsed_events.append(json.loads(event_bytes))
+                    except Exception as e:
+                        # If parsing fails, return the raw bytes as a string
+                        parsed_events.append(event_bytes.decode('utf-8', errors='replace'))
+                return parsed_events
+        except Exception as e:
+            print(f"[DBOS] Error getting events: {e}")
+    
+    return []
+
+
+@app.get("/agents/{agent_id}/results/list")
+async def list_agent_results(agent_id: str):
+    """
+    List all results for a specific agent.
+    """
+    # Try to get from DBOS if enabled
+    if os.environ.get("USE_DBOS", "false").lower() == "true":
+        try:
+            from dbos_client import dbos_client
+            if dbos_client:
+                results = await dbos_client.list_results(agent_id)
+                return results
+        except Exception as e:
+            print(f"[DBOS] Error listing results for agent {agent_id}: {e}")
+    
+    # Fallback to cache
+    return results_cache.get(agent_id, {})

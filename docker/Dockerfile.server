@@ -2,10 +2,16 @@ FROM python:3.12.9
 
 WORKDIR /app
 
+# Copy requirements and install dependencies including grpcio-tools
 COPY server/requirements.txt .
-
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copy proto file and generate Python protobuf files
+COPY dbos-go/api/dbos.proto ./dbos-go/api/
+RUN mkdir -p ./server
+RUN python -m grpc_tools.protoc -I./dbos-go/api --python_out=./server --grpc_python_out=./server ./dbos-go/api/dbos.proto
+
+# Copy server code
 COPY server/ ./server
 
 EXPOSE 8000

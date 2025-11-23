@@ -35,3 +35,4 @@ class ModuleState(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     error_message: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
+    request_id: Optional[str] = None

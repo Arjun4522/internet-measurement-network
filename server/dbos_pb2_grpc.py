@@ -95,6 +95,21 @@ class DBOSStub(object):
                 request_serializer=dbos__pb2.ListDueTasksRequest.SerializeToString,
                 response_deserializer=dbos__pb2.ListDueTasksResponse.FromString,
                 _registered_method=True)
+        self.AckTask = channel.unary_unary(
+                '/dbos.DBOS/AckTask',
+                request_serializer=dbos__pb2.AckTaskRequest.SerializeToString,
+                response_deserializer=dbos__pb2.AckTaskResponse.FromString,
+                _registered_method=True)
+        self.NackTask = channel.unary_unary(
+                '/dbos.DBOS/NackTask',
+                request_serializer=dbos__pb2.NackTaskRequest.SerializeToString,
+                response_deserializer=dbos__pb2.NackTaskResponse.FromString,
+                _registered_method=True)
+        self.GetEvents = channel.unary_unary(
+                '/dbos.DBOS/GetEvents',
+                request_serializer=dbos__pb2.GetEventsRequest.SerializeToString,
+                response_deserializer=dbos__pb2.GetEventsResponse.FromString,
+                _registered_method=True)
 
 
 class DBOSServicer(object):
@@ -177,6 +192,25 @@ class DBOSServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def AckTask(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def NackTask(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetEvents(self, request, context):
+        """Event Logging
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_DBOSServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -239,6 +273,21 @@ def add_DBOSServicer_to_server(servicer, server):
                     servicer.ListDueTasks,
                     request_deserializer=dbos__pb2.ListDueTasksRequest.FromString,
                     response_serializer=dbos__pb2.ListDueTasksResponse.SerializeToString,
+            ),
+            'AckTask': grpc.unary_unary_rpc_method_handler(
+                    servicer.AckTask,
+                    request_deserializer=dbos__pb2.AckTaskRequest.FromString,
+                    response_serializer=dbos__pb2.AckTaskResponse.SerializeToString,
+            ),
+            'NackTask': grpc.unary_unary_rpc_method_handler(
+                    servicer.NackTask,
+                    request_deserializer=dbos__pb2.NackTaskRequest.FromString,
+                    response_serializer=dbos__pb2.NackTaskResponse.SerializeToString,
+            ),
+            'GetEvents': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetEvents,
+                    request_deserializer=dbos__pb2.GetEventsRequest.FromString,
+                    response_serializer=dbos__pb2.GetEventsResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -566,6 +615,87 @@ class DBOS(object):
             '/dbos.DBOS/ListDueTasks',
             dbos__pb2.ListDueTasksRequest.SerializeToString,
             dbos__pb2.ListDueTasksResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def AckTask(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dbos.DBOS/AckTask',
+            dbos__pb2.AckTaskRequest.SerializeToString,
+            dbos__pb2.AckTaskResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def NackTask(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dbos.DBOS/NackTask',
+            dbos__pb2.NackTaskRequest.SerializeToString,
+            dbos__pb2.NackTaskResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetEvents(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/dbos.DBOS/GetEvents',
+            dbos__pb2.GetEventsRequest.SerializeToString,
+            dbos__pb2.GetEventsResponse.FromString,
             options,
             channel_credentials,
             insecure,
