@@ -211,7 +211,8 @@ async def subscribe_to_agent_results(agent_id: str):
                     print(f"Warning: Could not extract trace context: {e}")
             
             if request_id:
-                # Store result in DBOS if enabled
+                # Store result in DBOS if enabled (and wait for confirmation)
+                dbos_success = False
                 if os.environ.get("USE_DBOS", "false").lower() == "true":
                     try:
                         from dbos_client import dbos_client
@@ -221,16 +222,27 @@ async def subscribe_to_agent_results(agent_id: str):
                             success = await dbos_client.store_result(agent_id, request_id, "unknown", result_data)
                             if success:
                                 print(f"[DBOS] Stored result for agent {agent_id}, request {request_id}")
+                                dbos_success = True
                             else:
                                 print(f"[DBOS] Failed to store result for agent {agent_id}, request {request_id}")
                     except Exception as e:
                         print(f"[DBOS] Error storing result for agent {agent_id}, request {request_id}: {e}")
                 
-                # Store result in cache
-                if agent_id not in results_cache:
-                    results_cache[agent_id] = {}
-                results_cache[agent_id][request_id] = data
-                print(f"[Results] Stored result for agent {agent_id}, request {request_id}")
+                # Store result in cache only after DBOS confirmation (if DBOS is enabled)
+                # Otherwise always store in cache
+                if os.environ.get("USE_DBOS", "false").lower() == "true":
+                    if dbos_success:
+                        # Store in cache as backup
+                        if agent_id not in results_cache:
+                            results_cache[agent_id] = {}
+                        results_cache[agent_id][request_id] = data
+                        print(f"[Results] Stored result in cache for agent {agent_id}, request {request_id}")
+                else:
+                    # If DBOS is not enabled, store in cache
+                    if agent_id not in results_cache:
+                        results_cache[agent_id] = {}
+                    results_cache[agent_id][request_id] = data
+                    print(f"[Results] Stored result in cache for agent {agent_id}, request {request_id}")
             else:
                 print(f"[Results] Received message without ID from agent {agent_id}")
                 
@@ -397,9 +409,12 @@ async def get_agent_result(agent_id: str, request_id: str):
                     # Convert bytes back to JSON
                     try:
                         result = json.loads(result_data.decode('utf-8'))
+                        print(f"[DBOS] Retrieved result from DBOS for agent {agent_id}, request {request_id}")
                         return result
                     except Exception as e:
                         print(f"[DBOS] Error decoding result for agent {agent_id}, request {request_id}: {e}")
+                else:
+                    print(f"[DBOS] No result found in DBOS for agent {agent_id}, request {request_id}")
         except Exception as e:
             print(f"[DBOS] Error getting result for agent {agent_id}, request {request_id}: {e}")
     
@@ -410,6 +425,7 @@ async def get_agent_result(agent_id: str, request_id: str):
     if not result:
         raise HTTPException(status_code=404, detail="Result not found")
         
+    print(f"[Cache] Retrieved result from cache for agent {agent_id}, request {request_id}")
     return result
 
 
@@ -575,23 +591,23 @@ async def get_module_state_with_version(request_id: str):
 #     raise HTTPException(status_code=404, detail="Module states not found")
 
 
-@app.get("/tasks/{task_id}")
-async def get_task(task_id: str):
-    """
-    Get task details by ID.
-    """
-    # Try to get from DBOS if enabled
-    if os.environ.get("USE_DBOS", "false").lower() == "true":
-        try:
-            from dbos_client import dbos_client
-            if dbos_client:
-                task = await dbos_client.get_task(task_id)
-                if task:
-                    return task
-        except Exception as e:
-            print(f"[DBOS] Error getting task {task_id}: {e}")
+# @app.get("/tasks/{task_id}")
+# async def get_task(task_id: str):
+#     """
+#     Get task details by ID.
+#     """
+#     # Try to get from DBOS if enabled
+#     if os.environ.get("USE_DBOS", "false").lower() == "true":
+#         try:
+#             from dbos_client import dbos_client
+#             if dbos_client:
+#                 task = await dbos_client.get_task(task_id)
+#                 if task:
+#                     return task
+#         except Exception as e:
+#             print(f"[DBOS] Error getting task {task_id}: {e}")
     
-    raise HTTPException(status_code=404, detail="Task not found")
+#     raise HTTPException(status_code=404, detail="Task not found")
 
 
 @app.get("/events")
@@ -621,20 +637,20 @@ async def get_events(limit: int = 100):
     return []
 
 
-@app.get("/agents/{agent_id}/results/list")
-async def list_agent_results(agent_id: str):
-    """
-    List all results for a specific agent.
-    """
-    # Try to get from DBOS if enabled
-    if os.environ.get("USE_DBOS", "false").lower() == "true":
-        try:
-            from dbos_client import dbos_client
-            if dbos_client:
-                results = await dbos_client.list_results(agent_id)
-                return results
-        except Exception as e:
-            print(f"[DBOS] Error listing results for agent {agent_id}: {e}")
+# @app.get("/agents/{agent_id}/results/list")
+# async def list_agent_results(agent_id: str):
+#     """
+#     List all results for a specific agent.
+#     """
+#     # Try to get from DBOS if enabled
+#     if os.environ.get("USE_DBOS", "false").lower() == "true":
+#         try:
+#             from dbos_client import dbos_client
+#             if dbos_client:
+#                 results = await dbos_client.list_results(agent_id)
+#                 return results
+#         except Exception as e:
+#             print(f"[DBOS] Error listing results for agent {agent_id}: {e}")
     
-    # Fallback to cache
-    return results_cache.get(agent_id, {})
+#     # Fallback to cache
+#     return results_cache.get(agent_id, {})
