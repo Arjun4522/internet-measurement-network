@@ -16,6 +16,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Verbosity flag
+VERBOSE=true
+
 echo -e "${BLUE}=== Internet Measurement Network Chaos Engineering Tests ===${NC}"
 echo ""
 
@@ -38,6 +41,10 @@ check_service() {
     local service_name=$1
     local container_name=$2
     
+    if [ "$VERBOSE" = true ]; then
+        echo "Checking if $service_name ($container_name) is running..."
+    fi
+    
     if docker ps | grep -q "$container_name"; then
         echo -e "${GREEN}✓ $service_name is running${NC}"
         return 0
@@ -52,8 +59,12 @@ restart_service() {
     local service_name=$1
     local container_name=$2
     
-    echo "Restarting $service_name..."
+    echo "Restarting $service_name ($container_name)..."
+    if [ "$VERBOSE" = true ]; then
+        echo "Executing: docker restart $container_name"
+    fi
     docker restart "$container_name" > /dev/null
+    echo "Waiting for $service_name to restart..."
     sleep 5
 }
 
@@ -62,8 +73,12 @@ stop_service() {
     local service_name=$1
     local container_name=$2
     
-    echo "Stopping $service_name..."
+    echo "Stopping $service_name ($container_name)..."
+    if [ "$VERBOSE" = true ]; then
+        echo "Executing: docker stop $container_name"
+    fi
     docker stop "$container_name" > /dev/null
+    echo "Waiting for $service_name to stop..."
     sleep 2
 }
 
@@ -72,14 +87,21 @@ start_service() {
     local service_name=$1
     local container_name=$2
     
-    echo "Starting $service_name..."
+    echo "Starting $service_name ($container_name)..."
+    if [ "$VERBOSE" = true ]; then
+        echo "Executing: docker start $container_name"
+    fi
     docker start "$container_name" > /dev/null
+    echo "Waiting for $service_name to start..."
     sleep 5
 }
 
 # Wait for system to stabilize
 wait_for_system() {
     echo "Waiting for system to stabilize..."
+    if [ "$VERBOSE" = true ]; then
+        echo "Sleeping for 10 seconds to allow system stabilization..."
+    fi
     sleep 10
     check_server_health 30
 }
@@ -89,13 +111,22 @@ check_server_health() {
     local timeout=${1:-10}
     local count=0
     
-    echo "Checking server health..."
+    echo "Checking server health at $BASE_URL..."
+    if [ "$VERBOSE" = true ]; then
+        echo "Will try for up to $timeout seconds"
+    fi
     while [[ $count -lt $timeout ]]; do
         if curl -s "$BASE_URL/" >/dev/null 2>&1; then
             echo -e "${GREEN}✓ Server is responding${NC}"
+            if [ "$VERBOSE" = true ]; then
+                echo "Server health check successful"
+            fi
             return 0
         fi
         echo "Server not responding, waiting... ($((count+1))/$timeout)"
+        if [ "$VERBOSE" = true ]; then
+            echo "Executing health check: curl -s $BASE_URL/"
+        fi
         sleep 1
         count=$((count+1))
     done
@@ -127,20 +158,38 @@ print_header "GETTING AGENT INFORMATION"
 echo "Retrieving agent IDs..."
 
 # Get all agent IDs and filter for only alive ones
+if [ "$VERBOSE" = true ]; then
+    echo "Fetching all agents from $BASE_URL/agents"
+fi
 ALL_AGENTS=$(curl -s $BASE_URL/agents)
+if [ "$VERBOSE" = true ]; then
+    echo "Raw agents response: $ALL_AGENTS"
+fi
 ALIVE_AGENT_IDS=()
 
 # Parse the JSON to find alive agents
+echo "Parsing agent data to find alive agents..."
 while IFS= read -r id; do
     if [ "$id" != "null" ] && [ -n "$id" ]; then
+        if [ "$VERBOSE" = true ]; then
+            echo "Checking status for agent: $id"
+        fi
         ALIVE_STATUS=$(echo "$ALL_AGENTS" | jq -r ".\"$id\".alive" 2>/dev/null)
         if [ "$ALIVE_STATUS" = "true" ]; then
             ALIVE_AGENT_IDS+=("$id")
+            if [ "$VERBOSE" = true ]; then
+                echo "Agent $id is alive"
+            fi
+        else
+            if [ "$VERBOSE" = true ]; then
+                echo "Agent $id is not alive"
+            fi
         fi
     fi
 done < <(echo "$ALL_AGENTS" | jq -r 'keys[]' 2>/dev/null)
 
 # Check if we have at least 2 alive agents
+echo "Found ${#ALIVE_AGENT_IDS[@]} alive agents"
 if [ ${#ALIVE_AGENT_IDS[@]} -lt 2 ]; then
     echo -e "${RED}Need at least 2 alive agents for testing, found ${#ALIVE_AGENT_IDS[@]}${NC}"
     echo "All agents status:"
@@ -160,18 +209,27 @@ print_header "TEST 2: DURABILITY - SERVER RESTART"
 echo "Testing system resilience to server restarts..."
 
 # Submit a task before restart
-echo "Submitting test task to Agent 1..."
+echo "Submitting test task to Agent 1 ($AGENT_1_ID)..."
+if [ "$VERBOSE" = true ]; then
+    echo "Executing: curl -s -X POST $BASE_URL/agent/$AGENT_1_ID/ping_module -H \"Content-Type: application/json\" -d '{\"host\": \"1.1.1.1\", \"count\": 2}'"
+fi
 RESPONSE=$(curl -s -X POST $BASE_URL/agent/$AGENT_1_ID/ping_module \
     -H "Content-Type: application/json" \
     -d '{"host": "1.1.1.1", "count": 2}')
     
 echo "Raw response: $RESPONSE"
+if [ "$VERBOSE" = true ]; then
+    echo "Parsing response to extract request ID"
+fi
 REQUEST_ID=$(echo "$RESPONSE" | jq -r '.id' 2>/dev/null || echo "null")
 
 if [ "$REQUEST_ID" = "null" ] || [ "$REQUEST_ID" = "" ]; then
     echo -e "${RED}Failed to submit test task${NC}"
     echo "Response was: $RESPONSE"
     # Try alternate parsing
+    if [ "$VERBOSE" = true ]; then
+        echo "Trying alternate parsing method for request ID"
+    fi
     REQUEST_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
     if [ -z "$REQUEST_ID" ]; then
         exit 1
@@ -184,10 +242,19 @@ echo "Task submitted with ID: $REQUEST_ID"
 
 # Wait for task completion and verify initial storage
 echo "Waiting for task to complete and verifying initial storage..."
+if [ "$VERBOSE" = true ]; then
+    echo "Sleeping for 8 seconds to allow task completion"
+fi
 sleep 8
 
 echo "Checking initial result storage..."
+if [ "$VERBOSE" = true ]; then
+    echo "Fetching result from: $BASE_URL/agents/$AGENT_1_ID/results/$REQUEST_ID"
+fi
 INITIAL_RESULT=$(curl -s $BASE_URL/agents/$AGENT_1_ID/results/$REQUEST_ID 2>/dev/null)
+if [ "$VERBOSE" = true ]; then
+    echo "Initial result response: $INITIAL_RESULT"
+fi
 if echo "$INITIAL_RESULT" | jq -e .id >/dev/null 2>&1; then
     echo -e "${GREEN}✓ Task result initially stored successfully${NC}"
     ADDRESS=$(echo "$INITIAL_RESULT" | jq -r '.address')
@@ -202,14 +269,26 @@ fi
 # Restart server
 echo "Restarting server to test durability..."
 stop_service "Server" "server"
+if [ "$VERBOSE" = true ]; then
+    echo "Sleeping for 3 seconds after stopping server"
+fi
 sleep 3
 start_service "Server" "server"
 wait_for_system
+if [ "$VERBOSE" = true ]; then
+    echo "Sleeping for 5 seconds after system stabilization"
+fi
 sleep 5
 
 # Check if task result is still available
 echo "Checking if task result persists after server restart..."
+if [ "$VERBOSE" = true ]; then
+    echo "Fetching result from: $BASE_URL/agents/$AGENT_1_ID/results/$REQUEST_ID"
+fi
 RETRIEVED_RESULT=$(curl -s $BASE_URL/agents/$AGENT_1_ID/results/$REQUEST_ID 2>/dev/null)
+if [ "$VERBOSE" = true ]; then
+    echo "Post-restart result response: $RETRIEVED_RESULT"
+fi
 if echo "$RETRIEVED_RESULT" | jq -e .id >/dev/null 2>&1; then
     echo -e "${GREEN}✓ Task result successfully retrieved after server restart${NC}"
     ADDRESS=$(echo "$RETRIEVED_RESULT" | jq -r '.address')
@@ -236,14 +315,29 @@ echo "Testing idempotent execution of the same request..."
 # Submit the same task twice with untracked flag
 echo "Submitting identical tasks with untracked flag..."
 
+echo "Submitting first task..."
+if [ "$VERBOSE" = true ]; then
+    echo "Executing: curl -s -X POST \"$BASE_URL/agent/$AGENT_1_ID/ping_module?untracked=true\" -H \"Content-Type: application/json\" -d '{\"host\": \"8.8.4.4\", \"count\": 1}'"
+fi
 RESPONSE1=$(curl -s -X POST "$BASE_URL/agent/$AGENT_1_ID/ping_module?untracked=true" \
     -H "Content-Type: application/json" \
     -d '{"host": "8.8.4.4", "count": 1}' 2>/dev/null)
+if [ "$VERBOSE" = true ]; then
+    echo "First response: $RESPONSE1"
+fi
 
+echo "Submitting second identical task..."
+if [ "$VERBOSE" = true ]; then
+    echo "Executing: curl -s -X POST \"$BASE_URL/agent/$AGENT_1_ID/ping_module?untracked=true\" -H \"Content-Type: application/json\" -d '{\"host\": \"8.8.4.4\", \"count\": 1}'"
+fi
 RESPONSE2=$(curl -s -X POST "$BASE_URL/agent/$AGENT_1_ID/ping_module?untracked=true" \
     -H "Content-Type: application/json" \
     -d '{"host": "8.8.4.4", "count": 1}' 2>/dev/null)
+if [ "$VERBOSE" = true ]; then
+    echo "Second response: $RESPONSE2"
+fi
 
+echo "Comparing responses..."
 if [ "$RESPONSE1" = "$RESPONSE2" ]; then
     print_result "PASS" "Idempotent requests produce consistent responses"
 else
@@ -259,13 +353,27 @@ echo "Testing consistency across multiple agents..."
 # Submit tasks to both agents
 echo "Submitting tasks to both agents simultaneously..."
 
+echo "Submitting task to Agent 1 ($AGENT_1_ID)..."
+if [ "$VERBOSE" = true ]; then
+    echo "Executing: curl -s -X POST $BASE_URL/agent/$AGENT_1_ID/ping_module -H \"Content-Type: application/json\" -d '{\"host\": \"1.0.0.1\", \"count\": 1}'"
+fi
 TASK1_RESPONSE=$(curl -s -X POST $BASE_URL/agent/$AGENT_1_ID/ping_module \
     -H "Content-Type: application/json" \
     -d '{"host": "1.0.0.1", "count": 1}' 2>/dev/null)
+if [ "$VERBOSE" = true ]; then
+    echo "Agent 1 response: $TASK1_RESPONSE"
+fi
     
+echo "Submitting task to Agent 2 ($AGENT_2_ID)..."
+if [ "$VERBOSE" = true ]; then
+    echo "Executing: curl -s -X POST $BASE_URL/agent/$AGENT_2_ID/ping_module -H \"Content-Type: application/json\" -d '{\"host\": \"1.0.0.1\", \"count\": 1}'"
+fi
 TASK2_RESPONSE=$(curl -s -X POST $BASE_URL/agent/$AGENT_2_ID/ping_module \
     -H "Content-Type: application/json" \
     -d '{"host": "1.0.0.1", "count": 1}' 2>/dev/null)
+if [ "$VERBOSE" = true ]; then
+    echo "Agent 2 response: $TASK2_RESPONSE"
+fi
 
 TASK1_ID=$(echo $TASK1_RESPONSE | jq -r '.id')
 TASK2_ID=$(echo $TASK2_RESPONSE | jq -r '.id')
@@ -274,13 +382,32 @@ echo "Task 1 ID: $TASK1_ID (Agent 1)"
 echo "Task 2 ID: $TASK2_ID (Agent 2)"
 
 # Wait for completion
+echo "Waiting for tasks to complete..."
+if [ "$VERBOSE" = true ]; then
+    echo "Sleeping for 5 seconds to allow task completion"
+fi
 sleep 5
 
 # Check results from both agents
 echo "Checking results from both agents..."
 
+echo "Fetching result for Task 1 from Agent 1..."
+if [ "$VERBOSE" = true ]; then
+    echo "Executing: curl -s $BASE_URL/agents/$AGENT_1_ID/results/$TASK1_ID"
+fi
 RESULT1=$(curl -s $BASE_URL/agents/$AGENT_1_ID/results/$TASK1_ID 2>/dev/null)
+if [ "$VERBOSE" = true ]; then
+    echo "Result 1: $RESULT1"
+fi
+
+echo "Fetching result for Task 2 from Agent 2..."
+if [ "$VERBOSE" = true ]; then
+    echo "Executing: curl -s $BASE_URL/agents/$AGENT_2_ID/results/$TASK2_ID"
+fi
 RESULT2=$(curl -s $BASE_URL/agents/$AGENT_2_ID/results/$TASK2_ID 2>/dev/null)
+if [ "$VERBOSE" = true ]; then
+    echo "Result 2: $RESULT2"
+fi
 
 if echo "$RESULT1" | jq -e .id >/dev/null 2>&1 && echo "$RESULT2" | jq -e .id >/dev/null 2>&1; then
     print_result "PASS" "Both agents processed tasks successfully"
@@ -296,20 +423,35 @@ echo "Testing system behavior during DBOS service interruption..."
 
 # Submit a task
 echo "Submitting task before DBOS restart..."
+if [ "$VERBOSE" = true ]; then
+    echo "Executing: curl -s -X POST $BASE_URL/agent/$AGENT_1_ID/ping_module -H \"Content-Type: application/json\" -d '{\"host\": \"9.9.9.9\", \"count\": 1}'"
+fi
 RESPONSE=$(curl -s -X POST $BASE_URL/agent/$AGENT_1_ID/ping_module \
     -H "Content-Type: application/json" \
     -d '{"host": "9.9.9.9", "count": 1}' 2>/dev/null)
+if [ "$VERBOSE" = true ]; then
+    echo "Task submission response: $RESPONSE"
+fi
     
 REQUEST_ID=$(echo $RESPONSE | jq -r '.id')
 echo "Task submitted with ID: $REQUEST_ID"
 
 # Wait for task completion
 echo "Waiting for task to complete..."
+if [ "$VERBOSE" = true ]; then
+    echo "Sleeping for 5 seconds to allow task completion"
+fi
 sleep 5
 
 # Verify initial storage
 echo "Verifying initial result storage..."
+if [ "$VERBOSE" = true ]; then
+    echo "Fetching initial result from: $BASE_URL/agents/$AGENT_1_ID/results/$REQUEST_ID"
+fi
 INITIAL_RESULT=$(curl -s $BASE_URL/agents/$AGENT_1_ID/results/$REQUEST_ID 2>/dev/null)
+if [ "$VERBOSE" = true ]; then
+    echo "Initial result: $INITIAL_RESULT"
+fi
 if echo "$INITIAL_RESULT" | jq -e .id >/dev/null 2>&1; then
     echo -e "${GREEN}✓ Task result initially stored successfully${NC}"
 else
@@ -319,18 +461,34 @@ fi
 # Restart DBOS service
 echo "Restarting DBOS service..."
 stop_service "DBOS" "dbos"
+if [ "$VERBOSE" = true ]; then
+    echo "Sleeping for 3 seconds after stopping DBOS"
+fi
 sleep 3
 start_service "DBOS" "dbos"
 wait_for_system
 
 # Check if system recovers and result is still available
 echo "Checking system recovery and result persistence after DBOS restart..."
+if [ "$VERBOSE" = true ]; then
+    echo "Executing health check: curl -s $BASE_URL/"
+fi
 HEALTH_CHECK=$(curl -s $BASE_URL/ 2>/dev/null)
+if [ "$VERBOSE" = true ]; then
+    echo "Health check response: $HEALTH_CHECK"
+fi
 if echo "$HEALTH_CHECK" | jq -e .status >/dev/null 2>&1; then
     echo -e "${GREEN}✓ System API is responsive${NC}"
     
     # Check if result is still available
+    echo "Checking if task result is still accessible..."
+    if [ "$VERBOSE" = true ]; then
+        echo "Fetching result from: $BASE_URL/agents/$AGENT_1_ID/results/$REQUEST_ID"
+    fi
     RETRIEVED_RESULT=$(curl -s $BASE_URL/agents/$AGENT_1_ID/results/$REQUEST_ID 2>/dev/null)
+    if [ "$VERBOSE" = true ]; then
+        echo "Post-restart result: $RETRIEVED_RESULT"
+    fi
     if echo "$RETRIEVED_RESULT" | jq -e .id >/dev/null 2>&1; then
         echo -e "${GREEN}✓ Task result still accessible after DBOS restart${NC}"
         print_result "PASS" "System recovered and data persisted after DBOS restart"
@@ -352,23 +510,44 @@ print_header "TEST 6: AGENT FAILURE RECOVERY"
 echo "Testing agent recovery capabilities..."
 
 # Stop one agent
+echo "Stopping Agent 1..."
 stop_service "Agent 1" "agent_1"
+if [ "$VERBOSE" = true ]; then
+    echo "Sleeping for 3 seconds after stopping agent"
+fi
 sleep 3
 
 # Try to submit task to stopped agent
 echo "Attempting to submit task to stopped agent..."
+if [ "$VERBOSE" = true ]; then
+    echo "Executing: curl -s -w \"%{http_code}\" -X POST $BASE_URL/agent/$AGENT_1_ID/ping_module -H \"Content-Type: application/json\" -d '{\"host\": \"8.8.8.8\", \"count\": 1}'"
+fi
 ERROR_RESPONSE=$(curl -s -w "%{http_code}" -X POST $BASE_URL/agent/$AGENT_1_ID/ping_module \
     -H "Content-Type: application/json" \
     -d '{"host": "8.8.8.8", "count": 1}' 2>/dev/null)
+if [ "$VERBOSE" = true ]; then
+    echo "Response from stopped agent: $ERROR_RESPONSE"
+fi
 
 # Restart agent
+echo "Restarting Agent 1..."
 start_service "Agent 1" "agent_1"
 wait_for_system
 
 # Verify agent is back online
+echo "Verifying agent is back online..."
 # Wait a moment for the agent to register as alive
+if [ "$VERBOSE" = true ]; then
+    echo "Sleeping for 5 seconds to allow agent registration"
+fi
 sleep 5
+if [ "$VERBOSE" = true ]; then
+    echo "Fetching agent status from: $BASE_URL/agents/$AGENT_1_ID"
+fi
 AGENT_STATUS=$(curl -s $BASE_URL/agents/$AGENT_1_ID 2>/dev/null)
+if [ "$VERBOSE" = true ]; then
+    echo "Agent status response: $AGENT_STATUS"
+fi
 if echo "$AGENT_STATUS" | jq -e .alive >/dev/null 2>&1; then
     ALIVE=$(echo "$AGENT_STATUS" | jq -r '.alive')
     if [ "$ALIVE" = "true" ]; then
@@ -402,5 +581,9 @@ echo "  • Idempotency: Consistent behavior for repeated operations"
 echo "  • Consistency: Reliable processing across multiple agents"
 echo "  • Resilience: Recovery from service interruptions"
 echo ""
+if [ "$VERBOSE" = true ]; then
+    echo "Verbosity was enabled for this test run. All major steps were logged."
+    echo ""
+fi
 
 echo -e "${BLUE}=== Test Suite Completed ===${NC}"
