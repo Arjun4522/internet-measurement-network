@@ -35,10 +35,13 @@ pkgs.mkShell {
     echo "To install Python dependencies, run:"
     echo "pip install -r server/requirements.txt"
     echo ""
+    echo "To start fastapi server, run:"
+    echo "cd server && fastapi run main.py"
+    echo ""
     echo "To start the NATS server, run:"
     echo "nats-server -n newton -m 8222 -DVV"
     echo ""
     echo "To start an agent, run:"
-    echo "python -m aiori_agent start"
+    echo "python3 -m aiori_agent"
   '';
 }
