@@ -13,13 +13,6 @@ from nats.aio.msg import Msg
 
 from models import AgentHeartbeat, AgentInfo, ModuleState
 
-# Database imports
-from database import init_dbos, DATABASE_URL, get_db_session, engine
-from db_models import Base, Agent as DBAgent, ModuleResult as DBModuleResult, ModuleState as DBModuleState
-
-# Create tables
-Base.metadata.create_all(engine)
-
 from openapi_schema_validator import validate
 from jsonschema.exceptions import ValidationError
 
@@ -42,7 +35,6 @@ agent_cache: Dict[str, AgentInfo] = {}
 results_cache: Dict[str, Dict[str, Any]] = {}  # {agent_id: {request_id: result}}
 # 🆔 Request ID to module state mapping
 request_id_states_cache: Dict[str, ModuleState] = {}  # {request_id: ModuleState}
-
 settings = NATSotelSettings(
     service_name="server", 
     servers=NATS_URL,
@@ -52,120 +44,6 @@ settings = NATSotelSettings(
 nc: NATSotel = NATSotel(settings)
 
 app = FastAPI(title="Agent Server", version="1.0")
-
-# ======================
-#    DATABASE FUNCTIONS
-# ======================
-
-async def update_agent_heartbeat_db(data):
-    """Store agent heartbeat in database using SQLAlchemy"""
-    try:
-        agent_id = data["agent"]["id"]
-        hostname = data["agent"]["hostname"]
-        config_json = json.dumps(data)
-        
-        with get_db_session() as session:
-            # Try to get existing agent
-            agent = session.query(DBAgent).filter_by(agent_id=agent_id).first()
-            
-            if agent:
-                # Update existing agent
-                agent.alive = True
-                agent.hostname = hostname
-                agent.last_seen = datetime.utcnow()
-                agent.total_heartbeats += 1
-                agent.config = config_json
-            else:
-                # Create new agent
-                agent = DBAgent(
-                    agent_id=agent_id,
-                    alive=True,
-                    hostname=hostname,
-                    last_seen=datetime.utcnow(),
-                    first_seen=datetime.utcnow(),
-                    total_heartbeats=1,
-                    config=config_json
-                )
-                session.add(agent)
-            
-            session.commit()
-            print(f"[DB] Updated heartbeat for agent: {agent_id}")
-    except Exception as e:
-        print(f"[DB] Error updating agent heartbeat: {e}")
-
-async def update_module_state_db(data):
-    """Update module state in database using SQLAlchemy"""
-    try:
-        request_id = data.get("request_id")
-        if not request_id:
-            print("[DB] No request_id in module state data, skipping database update")
-            return
-            
-        agent_id = data["agent_id"]
-        module_name = data["module_name"]
-        state = data["state"]
-        error_message = data.get("error_message")
-        details_json = json.dumps(data.get("details", {}))
-        
-        with get_db_session() as session:
-            # Try to get existing module state
-            module_state = session.query(DBModuleState).filter_by(request_id=request_id).first()
-            
-            if module_state:
-                # Update existing state
-                module_state.state = state
-                module_state.error_message = error_message
-                module_state.details = details_json
-                module_state.timestamp = datetime.utcnow()
-            else:
-                # Create new state
-                module_state = DBModuleState(
-                    request_id=request_id,
-                    agent_id=agent_id,
-                    module_name=module_name,
-                    state=state,
-                    error_message=error_message,
-                    details=details_json,
-                    timestamp=datetime.utcnow()
-                )
-                session.add(module_state)
-            
-            session.commit()
-            print(f"[DB] Updated module state for request: {request_id}")
-    except Exception as e:
-        print(f"[DB] Error updating module state: {e}")
-
-async def store_module_result_db(agent_id, request_id, data):
-    """Store module result in database using SQLAlchemy"""
-    try:
-        if not request_id:
-            print("[DB] No request_id in module result, skipping database storage")
-            return
-            
-        result_json = json.dumps(data)
-        result_id = str(uuid.uuid4())
-        
-        with get_db_session() as session:
-            # Check if result already exists
-            existing = session.query(DBModuleResult).filter_by(
-                agent_id=agent_id, 
-                request_id=request_id
-            ).first()
-            
-            if not existing:
-                # Insert new result
-                result = DBModuleResult(
-                    id=result_id,
-                    agent_id=agent_id,
-                    request_id=request_id,
-                    result_data=result_json,
-                    created_at=datetime.utcnow()
-                )
-                session.add(result)
-                session.commit()
-                print(f"[DB] Stored result for agent {agent_id}, request {request_id}")
-    except Exception as e:
-        print(f"[DB] Error storing module result: {e}")
 
 
 # 📡 NATS connection & subscription
@@ -177,9 +55,6 @@ async def nats_connect():
         try:
             data = json.loads(msg.data.decode())
             hb = AgentHeartbeat(agent_id=data["agent"]["id"], hostname=data["agent"]["hostname"])
-
-            # Update database with heartbeat data
-            await update_agent_heartbeat_db(data)
 
             existing = agent_cache.get(hb.agent_id)
             now = datetime.now(timezone.utc)
@@ -230,9 +105,6 @@ async def nats_connect():
             state = data["state"]
             request_id = data.get("request_id")  # Get request_id if available
             
-            # Update database with module state
-            await update_module_state_db(data)
-            
             # Create module state object
             module_state = ModuleState(
                 agent_id=agent_id,
@@ -261,7 +133,7 @@ async def nats_connect():
     asyncio.create_task(subscribe_existing_agents())
 
 
-# 🔥 Subscribe to agent result topics
+# 📥 Subscribe to agent result topics
 async def subscribe_to_agent_results(agent_id: str):
     """Subscribe to result topics for a specific agent"""
     print(f"[Subscription] Attempting to subscribe to results for agent: {agent_id}")
@@ -271,9 +143,6 @@ async def subscribe_to_agent_results(agent_id: str):
             print(f"[Results] Received message on result topic for agent {agent_id}")
             data = json.loads(msg.data.decode())
             request_id = data.get("id")
-            
-            # Store result in database
-            await store_module_result_db(agent_id, request_id, data)
             
             if request_id:
                 # Store result in cache
@@ -325,15 +194,9 @@ async def cleanup_agents():
         await asyncio.sleep(HEARTBEAT_INTERVAL)
 
 
-# 📌 Startup
+# 🔌 Startup
 @app.on_event("startup")
 async def startup_event():
-    # Initialize DBOS
-    try:
-        init_dbos()
-    except Exception as e:
-        print(f"Failed to initialize DBOS: {e}")
-    
     asyncio.create_task(nats_connect())
     asyncio.create_task(cleanup_agents())
     
@@ -381,28 +244,6 @@ async def get_alive_agents():
     """
     Get only currently alive agents.
     """
-    # Try to get from database first, fallback to cache
-    try:
-        with get_db_session() as session:
-            db_results = session.query(DBAgent).filter_by(alive=True).all()
-            if db_results:
-                # Convert database results to AgentInfo objects
-                result = {}
-                for row in db_results:
-                    result[row.agent_id] = AgentInfo(
-                        agent_id=row.agent_id,
-                        alive=row.alive,
-                        hostname=row.hostname,
-                        last_seen=row.last_seen,
-                        config=json.loads(row.config) if row.config else {},
-                        first_seen=row.first_seen,
-                        total_heartbeats=row.total_heartbeats
-                    )
-                return result
-    except Exception as e:
-        print(f"[API] Error querying database for alive agents: {e}")
-    
-    # Fallback to in-memory cache
     return {aid: info for aid, info in agent_cache.items() if info.alive}
 
 
@@ -430,19 +271,6 @@ async def get_agent_result(agent_id: str, request_id: str):
     """
     Get result for a specific agent and request ID.
     """
-    # Try to get from database first
-    try:
-        with get_db_session() as session:
-            db_result = session.query(DBModuleResult).filter_by(
-                agent_id=agent_id, 
-                request_id=request_id
-            ).first()
-            if db_result:
-                return json.loads(db_result.result_data)
-    except Exception as e:
-        print(f"[API] Error querying database for agent result: {e}")
-    
-    # Fallback to in-memory cache
     agent_results = results_cache.get(agent_id, {})
     result = agent_results.get(request_id)
     
@@ -478,7 +306,7 @@ async def run_module(
         agent_id: str, 
         module_name: str, 
         module_request: Dict[str, Any], 
-        untracked: bool = Query(False)
+        untracked: bool = Query(False) # Query parameter with default and alias
     ):
     try:
         agent = agent_cache.get(agent_id)
@@ -515,11 +343,30 @@ async def run_module(
 #    MODULE STATE ROUTES
 # ======================
 
+# @app.get("/agents/{agent_id}/modules")
+# async def get_agent_modules_states(agent_id: str):
+#     """
+#     Get all module states for a specific agent.
+#     """
+#     # Return empty dict since we're no longer tracking module states
+#     return {}
+
+
+# @app.get("/agents/{agent_id}/modules/{module_name}")
+# async def get_module_state(agent_id: str, module_name: str):
+#     """
+#     Get the state of a specific module for an agent.
+#     """
+#     # Return 404 since we're no longer tracking module states
+#     raise HTTPException(status_code=404, detail="Module state tracking disabled")
+
+
 @app.get("/modules/states")
 async def get_all_module_states():
     """
     Get all module states across all agents.
     """
+    # Return empty dict since we're no longer tracking module states
     return {}
 
 
@@ -528,23 +375,6 @@ async def get_module_state_by_request_id(request_id: str):
     """
     Get module state by request ID.
     """
-    # Try to get from database first
-    try:
-        with get_db_session() as session:
-            db_result = session.query(DBModuleState).filter_by(request_id=request_id).first()
-            if db_result:
-                return {
-                    "agent_id": db_result.agent_id,
-                    "module_name": db_result.module_name,
-                    "state": db_result.state,
-                    "timestamp": db_result.timestamp,
-                    "error_message": db_result.error_message,
-                    "details": json.loads(db_result.details) if db_result.details else None
-                }
-    except Exception as e:
-        print(f"[API] Error querying database for module state: {e}")
-    
-    # Fallback to in-memory cache
     module_state = request_id_states_cache.get(request_id)
     
     if not module_state:
