@@ -68,20 +68,20 @@ class PingModule(BaseWorker):
         Processes incoming ping requests and sends results.
         This operation will be grouped under "ping_module" trace group.
         """
-        request_id = None
+        workflow_id = None
         try:
             # Log raw message for debugging
             self.logger.debug(f"Received raw message: {msg.data.decode()}")
 
             data = json.loads(msg.data.decode())
-            request_id = data.get("id")  # Extract request ID for state tracking
+            workflow_id = data.get("workflow_id")  # Extract workflow ID for state tracking
 
             query = PingQuery(**data)
             model_type = PingQuery.model_type()
 
             # Report that we're running this specific request
-            if request_id:
-                await self._report_state("running", details={"action": "processing_request"}, request_id=request_id)
+            if workflow_id:
+                await self._report_state("RUNNING", details={"action": "processing_request"}, request_id=workflow_id)
 
             # Execute ping
             from icmplib import Host
@@ -110,21 +110,22 @@ class PingModule(BaseWorker):
                 "rtts": ping_result.rtts,
                 "packets_received": ping_result.packets_received,
                 "packets_sent": ping_result.packets_sent,
+                "workflow_id": workflow_id
             }
 
             self.logger.info(f"{self.name}: Ping completed with result: {result}")
             await self.nc.publish(self.sub_out, json.dumps(result).encode("utf-8"))
             self.logger.debug(f"{self.name}: Published to {self.sub_out}")
 
-            # Report completion with request ID
-            if request_id:
-                await self._report_state("completed", details={"action": "request_completed"}, request_id=request_id)
+            # Report completion with workflow ID
+            if workflow_id:
+                await self._report_state("COMPLETED", details={"action": "request_completed"}, request_id=workflow_id)
 
         except Exception as e:
             self.logger.exception(f"{self.name}: Error during handle")
             await self.nc.publish(self.sub_err, str(e).encode("utf-8"))
             
-            # Report error with request ID
-            if request_id:
-                await self._report_state("error", str(e), details={"action": "request_failed"}, request_id=request_id)
+            # Report error with workflow ID
+            if workflow_id:
+                await self._report_state("FAILED", str(e), details={"action": "request_failed"}, request_id=workflow_id)
 

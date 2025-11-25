@@ -3,612 +3,698 @@ import json
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any, Dict, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, Query, HTTPException
 from dbos import DBOS, DBOSConfig, Queue
-
 from nats_observe.config import NATSotelSettings
 from nats_observe.client import Client as NATSotel
 from nats.aio.msg import Msg
-
-from models import AgentHeartbeat, AgentInfo, ModuleState, ModuleStateEnum
-
 from openapi_schema_validator import validate
 from jsonschema.exceptions import ValidationError
 
-# ======== CONFIG ============
-NATS_URL = [os.environ.get("NATS_URL", "nats://localhost:4222")]
-HEARTBEAT_SUBJECT = "agent.heartbeat_module"
-HEARTBEAT_INTERVAL = 5
-HEARTBEAT_TIMEOUT = HEARTBEAT_INTERVAL * 2
+from models import AgentInfo, ModuleStateEnum
 
-# OTel configuration
-OTLP_TRACE_ENDPOINT = os.environ.get("OTLP_TRACE_ENDPOINT", "otel-collector:4317")
-OTLP_METRICS_ENDPOINT = os.environ.get("OTLP_METRICS_ENDPOINT", "otel-collector:4317")
-OTLP_LOGS_ENDPOINT = os.environ.get("OTLP_LOGS_ENDPOINT", "otel-collector:4317")
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
 
-# DBOS configuration
-DBOS_SYSTEM_DATABASE_URL = os.environ.get("DBOS_SYSTEM_DATABASE_URL", "sqlite:///db/data.db")
-# ============================
+class Config:
+    """Centralized configuration"""
+    NATS_URL = [os.environ.get("NATS_URL", "nats://localhost:4222")]
+    HEARTBEAT_SUBJECT = "agent.heartbeat_module"
+    HEARTBEAT_INTERVAL = 5
+    HEARTBEAT_TIMEOUT = HEARTBEAT_INTERVAL * 2
+    
+    # OpenTelemetry endpoints
+    OTLP_TRACE_ENDPOINT = os.environ.get("OTLP_TRACE_ENDPOINT", "otel-collector:4317")
+    OTLP_METRICS_ENDPOINT = os.environ.get("OTLP_METRICS_ENDPOINT", "otel-collector:4317")
+    OTLP_LOGS_ENDPOINT = os.environ.get("OTLP_LOGS_ENDPOINT", "otel-collector:4317")
+    
+    # Database
+    DBOS_SYSTEM_DATABASE_URL = os.environ.get("DBOS_SYSTEM_DATABASE_URL", "sqlite:///db/data.db")
 
-# 🧠 In-memory cache
-agent_cache: Dict[str, AgentInfo] = {}
-results_cache: Dict[str, Dict[str, Any]] = {}
-request_id_states_cache: Dict[str, ModuleState] = {}
+config = Config()
 
-# Initialize DBOS
+# ============================================================================
+# STATE MANAGEMENT
+# ============================================================================
+
+class WorkflowState:
+    """Manages workflow state tracking with only 3 states: RUNNING, COMPLETED, FAILED"""
+    def __init__(self):
+        # workflow_id -> workflow metadata
+        self.workflows: Dict[str, Dict[str, Any]] = {}
+        # workflow_id -> list of state transitions
+        self.state_history: Dict[str, list] = {}
+    
+    def create_workflow(self, workflow_id: str, agent_id: str, module_name: str, 
+                       request: Dict[str, Any]) -> None:
+        """Initialize a new workflow with RUNNING state"""
+        self.workflows[workflow_id] = {
+            "agent_id": agent_id,
+            "module_name": module_name,
+            "request": request,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        self.state_history[workflow_id] = [{
+            "state": "RUNNING",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }]
+        
+        print(f"[Workflow] Created {workflow_id}: RUNNING")
+    
+    def set_state(self, workflow_id: str, state: str, **metadata) -> None:
+        """Set workflow state - only RUNNING, COMPLETED, or FAILED allowed"""
+        if state not in ["RUNNING", "COMPLETED", "FAILED"]:
+            raise ValueError(f"Invalid state: {state}. Must be RUNNING, COMPLETED, or FAILED")
+        
+        if workflow_id not in self.state_history:
+            self.state_history[workflow_id] = []
+        
+        state_entry = {
+            "state": state,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **metadata
+        }
+        self.state_history[workflow_id].append(state_entry)
+        print(f"[Workflow] {workflow_id}: {state}")
+    
+    def get_current_state(self, workflow_id: str) -> Optional[str]:
+        """Get current state of a workflow"""
+        history = self.state_history.get(workflow_id, [])
+        return history[-1]["state"] if history else None
+
+class AgentCache:
+    """Manages agent lifecycle and metadata"""
+    def __init__(self):
+        self.agents: Dict[str, AgentInfo] = {}
+    
+    def update_heartbeat(self, agent_id: str, hostname: str, config: Dict[str, Any]) -> AgentInfo:
+        """Update or create agent from heartbeat"""
+        now = datetime.now(timezone.utc)
+        
+        if agent_id in self.agents:
+            agent = self.agents[agent_id]
+            agent.last_seen = now
+            agent.alive = True
+            agent.config = config
+            agent.total_heartbeats += 1
+            print(f"[AgentCache] Updated: {agent_id}")
+        else:
+            agent = AgentInfo(
+                agent_id=agent_id,
+                alive=True,
+                hostname=hostname,
+                last_seen=now,
+                config=config,
+                first_seen=now,
+                total_heartbeats=1
+            )
+            self.agents[agent_id] = agent
+            print(f"[AgentCache] Registered: {agent_id}")
+        
+        return agent
+    
+    def mark_dead_agents(self, timeout_seconds: int) -> None:
+        """Mark agents as dead if they haven't sent heartbeat"""
+        now = datetime.now(timezone.utc)
+        for agent_id, agent in self.agents.items():
+            if agent.alive and (now - agent.last_seen) > timedelta(seconds=timeout_seconds):
+                agent.alive = False
+                print(f"[AgentCache] Marked dead: {agent_id}")
+    
+    def get(self, agent_id: str) -> Optional[AgentInfo]:
+        """Get agent by ID"""
+        return self.agents.get(agent_id)
+    
+    def get_alive(self) -> Dict[str, AgentInfo]:
+        """Get all alive agents"""
+        return {aid: agent for aid, agent in self.agents.items() if agent.alive}
+    
+    def get_dead(self) -> Dict[str, AgentInfo]:
+        """Get all dead agents"""
+        return {aid: agent for aid, agent in self.agents.items() if not agent.alive}
+
+# Global state instances
+workflow_state = WorkflowState()
+agent_cache = AgentCache()
+
+# ============================================================================
+# DBOS INITIALIZATION
+# ============================================================================
+
 dbos_config: DBOSConfig = {
     "name": "agent-server",
-    "system_database_url": DBOS_SYSTEM_DATABASE_URL,
+    "system_database_url": config.DBOS_SYSTEM_DATABASE_URL,
 }
 DBOS(config=dbos_config)
 
-# NATS settings
-settings = NATSotelSettings(
-    service_name="server", 
-    servers=NATS_URL,
-    otlp_trace_endpoint=OTLP_TRACE_ENDPOINT,
-    otlp_logs_endpoint=OTLP_LOGS_ENDPOINT
+# ============================================================================
+# NATS CLIENT
+# ============================================================================
+
+nats_settings = NATSotelSettings(
+    service_name="server",
+    servers=config.NATS_URL,
+    otlp_trace_endpoint=config.OTLP_TRACE_ENDPOINT,
+    otlp_logs_endpoint=config.OTLP_LOGS_ENDPOINT
 )
-nc: NATSotel = NATSotel(settings)
+nats_client: NATSotel = NATSotel(nats_settings)
 
-app = FastAPI(title="Agent Server", version="1.0")
-
-# Queue for async module execution
-module_execution_queue = Queue("module_execution", worker_concurrency=10)
-
-
-# ======== DBOS WORKFLOW STEPS ========
+# ============================================================================
+# DBOS WORKFLOW STEPS
+# ============================================================================
 
 @DBOS.step()
 async def validate_agent(agent_id: str) -> AgentInfo:
-    """Step 1: Validate agent is alive"""
+    """Validate that agent exists and is alive"""
     agent = agent_cache.get(agent_id)
     if not agent or not agent.alive:
         raise HTTPException(status_code=400, detail="Agent is not alive")
     return agent
 
-
 @DBOS.step()
-async def validate_module_request(
-    agent: AgentInfo, 
-    module_name: str, 
+async def validate_module_schema(
+    agent: AgentInfo,
+    module_name: str,
     module_request: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """Step 2: Validate request against schema"""
-    all_spec = agent.config.get("agent", {}).get("modules", {}).get("spec", {})
+    """Validate module request against agent's schema"""
+    module_specs = agent.config.get("agent", {}).get("modules", {}).get("spec", {})
     
-    if module_name not in all_spec:
-        raise HTTPException(status_code=404, detail="Module not found")
+    if module_name not in module_specs:
+        raise HTTPException(status_code=404, detail=f"Module '{module_name}' not found")
     
-    module_spec = all_spec[module_name]
+    module_spec = module_specs[module_name]
     
-    # Ensure module_spec is a dictionary
     if not isinstance(module_spec, dict):
-        raise HTTPException(status_code=500, detail="Invalid module specification format")
+        raise HTTPException(status_code=500, detail="Invalid module specification")
     
     try:
-        # Ensure input_schema is a dictionary, not a string
         input_schema = module_spec['input_schema']
         if isinstance(input_schema, str):
             input_schema = json.loads(input_schema)
         validate(module_request, input_schema)
     except ValidationError as ex:
-        raise HTTPException(status_code=400, detail=f"Validation Error: {str(ex)}")
+        raise HTTPException(status_code=400, detail=f"Validation error: {str(ex)}")
     except json.JSONDecodeError as ex:
-        raise HTTPException(status_code=500, detail=f"Invalid input_schema format: {str(ex)}")
-    except json.JSONDecodeError as ex:
-        raise HTTPException(status_code=500, detail=f"Invalid input_schema format: {str(ex)}")
+        raise HTTPException(status_code=500, detail=f"Invalid schema format: {str(ex)}")
     
     return module_spec
 
-
 @DBOS.step(retries_allowed=True, max_attempts=3)
-async def publish_to_nats(subject: str, message: str):
-    """Step 3: Publish to NATS with retries"""
-    await nc.publish(subject, message.encode())
-
-
-@DBOS.step()
-async def store_request_tracking(agent_id: str, request_id: str, module_name: str):
-    """Step 4: Store request for tracking"""
-    if agent_id not in results_cache:
-        results_cache[agent_id] = {}
-    
-    # Store with proper structure
-    results_cache[agent_id][request_id] = {
-        "status": "pending",
-        "module": module_name,
-        "submitted_at": datetime.now(timezone.utc).isoformat(),
-        "id": request_id  # Ensure ID is included
-    }
-    print(f"[Tracking] Stored pending request {request_id} for agent {agent_id}")
-
-
-@DBOS.step()
-async def parse_result(msg_data: bytes) -> Dict[str, Any]:
-    """Parse and validate result message"""
-    return json.loads(msg_data.decode())
-
-
-@DBOS.step()
-async def store_result(agent_id: str, request_id: str, result: Dict[str, Any]):
-    """Store result in cache - merge with existing pending data"""
-    if agent_id not in results_cache:
-        results_cache[agent_id] = {}
-    
-    current = results_cache[agent_id].get(request_id, {})
-    
-    if current.get("status") == "pending":
-        # Merge the actual result into the pending structure
-        merged_result = {**current, **result}
-        # Remove pending status since we now have actual results
-        if "status" in merged_result and merged_result["status"] == "pending":
-            del merged_result["status"]
-        results_cache[agent_id][request_id] = merged_result
-        print(f"[Store] Merged actual data into pending result for {request_id}")
-    else:
-        # No pending entry, store directly
-        results_cache[agent_id][request_id] = result
-        print(f"[Store] Stored new result for {request_id}")
-
-
-@DBOS.step()
-async def update_module_state(request_id: str, state: ModuleStateEnum):
-    """Update module state for request"""
-    if request_id in request_id_states_cache:
-        request_id_states_cache[request_id].state = state
-        request_id_states_cache[request_id].timestamp = datetime.now(timezone.utc)
-
+async def publish_to_nats(subject: str, message: str) -> None:
+    """Publish message to NATS with retries"""
+    await nats_client.publish(subject, message.encode())
 
 @DBOS.step(retries_allowed=True, max_attempts=5, backoff_rate=2.0)
-async def subscribe_to_topic(topic: str, agent_id: str):
-    """Subscribe to NATS topic with retries"""
-    async def result_handler(msg: Msg):
-        try:
-            await process_agent_result(agent_id, msg.data)
-        except Exception as e:
-            print(f"[Results] Error in result handler for {agent_id}: {e}")
-    
-    await nc.subscribe(topic, cb=result_handler)
-    print(f"[Subscription] Subscribed to {topic}")
+async def subscribe_to_nats(subject: str, callback) -> None:
+    """Subscribe to NATS subject with retries"""
+    await nats_client.subscribe(subject, cb=callback)
 
-
-# ======== DBOS WORKFLOWS ========
+# ============================================================================
+# DBOS WORKFLOWS
+# ============================================================================
 
 @DBOS.workflow()
-async def run_module(
-    agent_id: str, 
-    module_name: str, 
-    module_request: Dict[str, Any], 
+async def execute_module_workflow(
+    agent_id: str,
+    module_name: str,
+    module_request: Dict[str, Any],
     untracked: bool = False
-):
-    """Durable workflow for module execution"""
+) -> Dict[str, Any]:
+    """
+    Durable workflow for module execution coordination.
+    Uses workflow_id as the primary identifier throughout.
+    States: RUNNING → COMPLETED or FAILED
+    """
+    workflow_id = getattr(DBOS, 'current_workflow_id', None) or str(uuid.uuid4())
+    
     try:
+        # Add workflow_id to the request
+        module_request["workflow_id"] = workflow_id
+        
+        # Initialize workflow state (RUNNING)
+        workflow_state.create_workflow(
+            workflow_id=workflow_id,
+            agent_id=agent_id,
+            module_name=module_name,
+            request=module_request
+        )
+        
         # Step 1: Validate agent
         agent = await validate_agent(agent_id)
         
-        # Generate request ID if not untracked
-        if not untracked and "id" not in module_request:
-            module_request["id"] = str(uuid.uuid4())
-        
-        request_id = module_request.get("id")
-        
         # Step 2: Validate module request
-        module_spec = await validate_module_request(agent, module_name, module_request)
+        module_spec = await validate_module_schema(agent, module_name, module_request)
         
-        # Step 3: Publish to NATS (with retries)
+        # Step 3: Publish to NATS
         input_subject = module_spec['input_subject']
         if not isinstance(input_subject, str):
-            raise HTTPException(status_code=500, detail="Invalid input subject type")
+            raise HTTPException(status_code=500, detail="Invalid input subject")
+        
         await publish_to_nats(input_subject, json.dumps(module_request))
         
-        # Step 4: Track request
-        if request_id:
-            await store_request_tracking(agent_id, request_id, module_name)
-        
-        # Get workflow ID - FIXED: Use context or available method
-        workflow_id = getattr(DBOS, 'current_workflow_id', None) or str(uuid.uuid4())
+        print(f"[Workflow] {workflow_id}: Published to {input_subject}")
         
         return {
-            "message": "success",
-            "id": request_id,
-            "workflow_id": workflow_id
+            "status": "success",
+            "workflow_id": workflow_id,
+            "message": "Module execution initiated"
         }
         
     except HTTPException:
+        workflow_state.set_state(workflow_id, "FAILED", error="HTTP error")
         raise
     except Exception as ex:
+        workflow_state.set_state(workflow_id, "FAILED", error=str(ex))
         raise HTTPException(status_code=500, detail=f"Workflow error: {str(ex)}")
 
-
 @DBOS.workflow()
-async def process_agent_result(agent_id: str, msg_data: bytes):
-    """Durable workflow for processing agent results"""
-    try:
-        # Step 1: Parse result
-        result = await parse_result(msg_data)
-        request_id = result.get("id")
-        
-        if not request_id:
-            print(f"[Results] Skipping untracked result from agent {agent_id}")
-            return
-        
-        # Step 2: Check if we already processed this result (more robust check)
-        agent_results = results_cache.get(agent_id, {})
-        existing_result = agent_results.get(request_id)
-        
-        # If result exists and is not pending, skip processing
-        if existing_result and existing_result.get("status") != "pending":
-            print(f"[Results] Already processed result for request {request_id}, skipping")
-            return
-        
-        print(f"[DEBUG] Processing new result for request {request_id}: {result}")
-        
-        # Step 3: Store result
-        await store_result(agent_id, request_id, result)
-        
-        # Step 4: Update state - handle missing success field
-        success = result.get("success")
-        if success is None:
-            # For ping results, consider it successful if we have the result data
-            success = "rtts" in result or "address" in result
-        
-        state = ModuleStateEnum.COMPLETED if success else ModuleStateEnum.ERROR
-        await update_module_state(request_id, state)
-        
-        print(f"[Results] Successfully processed result for agent {agent_id}, request {request_id}")
-        
-    except Exception as e:
-        print(f"[ERROR] Failed to process agent result: {e}")
-
-@DBOS.workflow()
-async def setup_agent_subscriptions(agent_id: str, module_specs: Dict[str, Any]):
-    """Durable workflow for setting up agent subscriptions"""
-    topics = []
+async def setup_agent_subscriptions_workflow(
+    agent_id: str,
+    module_specs: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Durable workflow for setting up agent result subscriptions.
+    Ensures reliable subscription to all agent output topics.
+    """
+    topics = set()
     
     # Generic output topic
     generic_topic = f"agent.{agent_id}.out"
-    topics.append(generic_topic)
+    topics.add(generic_topic)
     
-    # Module-specific topics
+    # Module-specific output topics
     for module_name, module_config in module_specs.items():
         if "output_subject" in module_config:
             output_topic = module_config["output_subject"]
-            if output_topic != generic_topic:
-                topics.append(output_topic)
+            if output_topic:
+                topics.add(output_topic)
     
-    # Subscribe to all topics with retry
+    # Subscribe to all topics
+    async def result_handler(msg: Msg):
+        """Handler for module results - updates workflow state"""
+        try:
+            data = json.loads(msg.data.decode())
+            workflow_id = data.get("workflow_id")
+            
+            if not workflow_id:
+                print(f"[Result] Received result without workflow_id, skipping")
+                return
+            
+            # Check if workflow exists
+            if workflow_id not in workflow_state.workflows:
+                print(f"[Result] Unknown workflow: {workflow_id}")
+                return
+            
+            # Update workflow state based on success
+            success = data.get("success", True)
+            final_state = "COMPLETED" if success else "FAILED"
+            workflow_state.set_state(workflow_id, final_state, result_received=True)
+            
+        except Exception as e:
+            print(f"[Result] Error processing result: {e}")
+    
     for topic in topics:
-        await subscribe_to_topic(topic, agent_id)
+        await subscribe_to_nats(topic, result_handler)
     
-    print(f"[Subscription] Setup complete for agent {agent_id}: {topics}")
-    return {"subscribed_topics": topics}
+    print(f"[Subscription] Agent {agent_id}: {list(topics)}")
+    return {"agent_id": agent_id, "subscribed_topics": list(topics)}
 
+# ============================================================================
+# NATS HANDLERS
+# ============================================================================
 
-# ======== NATS CONNECTION & HANDLERS ========
-
-async def nats_connect():
-    await nc.connect(settings.servers, name="server", verbose=True, reconnect_time_wait=0)
-    print(f"[Cache] Connected to NATS: {NATS_URL}")
-
-    async def heartbeat_handler(msg: Msg):
-        try:
-            data = json.loads(msg.data.decode())
-            hb = AgentHeartbeat(agent_id=data["agent"]["id"], hostname=data["agent"]["hostname"])
-
-            existing = agent_cache.get(hb.agent_id)
-            now = datetime.now(timezone.utc)
-
-            if existing:
-                existing.last_seen = hb.timestamp
-                existing.alive = True
+async def handle_heartbeat(msg: Msg) -> None:
+    """Process agent heartbeat messages"""
+    try:
+        data = json.loads(msg.data.decode())
+        agent_id = data["agent"]["id"]
+        hostname = data["agent"]["hostname"]
+        
+        # Update agent cache
+        previous_config = None
+        if agent_id in agent_cache.agents:
+            previous_config = agent_cache.agents[agent_id].config
+        
+        agent = agent_cache.update_heartbeat(agent_id, hostname, data)
+        
+        # If config changed or new agent, resubscribe
+        if previous_config != data:
+            print(f"[Subscription] Config changed for {agent_id}, resubscribing...")
+            try:
+                module_specs = data.get("agent", {}).get("modules", {}).get("spec", {})
+                await setup_agent_subscriptions_workflow(agent_id, module_specs)
+            except Exception as e:
+                print(f"[Subscription] Error resubscribing for {agent_id}: {e}")
                 
-                # Check if config has changed and resubscribe if needed
-                if existing.config != data:
-                    print(f"[Subscription] Agent {hb.agent_id} config updated, resubscribing...")
-                    try:
-                        await subscribe_to_agent_results(hb.agent_id)
-                        print(f"[Subscription] Successfully resubscribed for agent: {hb.agent_id}")
-                    except Exception as e:
-                        print(f"[Subscription] Error resubscribing for agent {hb.agent_id}: {e}")
-                
-                existing.config = data
-                existing.total_heartbeats += 1
-                print(f"[Cache] Updated heartbeat: {hb.agent_id} @ {hb.timestamp}")
-            else:
-                agent_cache[hb.agent_id] = AgentInfo(
-                    agent_id=hb.agent_id,
-                    alive=True,
-                    hostname=hb.hostname,
-                    last_seen=hb.timestamp,
-                    config=data,
-                    first_seen=now,
-                    total_heartbeats=1
-                )
-                
-                # Subscribe to result topics for new agent
-                print(f"[Subscription] New agent detected: {hb.agent_id}, subscribing...")
-                try:
-                    await subscribe_to_agent_results(hb.agent_id)
-                    print(f"[Subscription] Successfully subscribed for agent: {hb.agent_id}")
-                except Exception as e:
-                    print(f"[Subscription] Error subscribing for agent {hb.agent_id}: {e}")
-                
-                print(f"[Cache] New agent registered: {hb.agent_id}")
+    except Exception as e:
+        print(f"[Heartbeat] Error processing heartbeat: {e}")
 
-        except Exception as e:
-            print("[Cache] Error parsing heartbeat:", e)
+async def handle_module_state(msg: Msg) -> None:
+    """
+    Process module state change messages from agents.
+    Maps agent states to workflow states: RUNNING, COMPLETED, FAILED
+    """
+    try:
+        data = json.loads(msg.data.decode())
+        agent_id = data["agent_id"]
+        module_name = data["module_name"]
+        state = data["state"]
+        workflow_id = data.get("workflow_id")
+        
+        if not workflow_id:
+            print(f"[ModuleState] No workflow_id in state message, skipping")
+            return
+        
+        # Check if workflow exists
+        if workflow_id not in workflow_state.workflows:
+            print(f"[ModuleState] Unknown workflow: {workflow_id}")
+            return
+        
+        # Map agent states to our 3 workflow states
+        state_mapping = {
+            "STARTED": "RUNNING",
+            "RUNNING": "RUNNING",
+            "COMPLETED": "COMPLETED",
+            "ERROR": "FAILED",
+            "FAILED": "FAILED"
+        }
+        
+        mapped_state = state_mapping.get(state.upper())
+        if not mapped_state:
+            print(f"[ModuleState] Unknown state '{state}', ignoring")
+            return
+        
+        # Update workflow state
+        workflow_state.set_state(
+            workflow_id,
+            mapped_state,
+            agent_id=agent_id,
+            module_name=module_name,
+            agent_state=state,
+            error_message=data.get("error_message")
+        )
+        
+    except Exception as e:
+        print(f"[ModuleState] Error processing state: {e}")
 
-    async def module_state_handler(msg: Msg):
-        try:
-            data = json.loads(msg.data.decode())
-            agent_id = data["agent_id"]
-            module_name = data["module_name"]
-            state = data["state"]
-            request_id = data.get("request_id")
-            
-            module_state = ModuleState(
-                agent_id=agent_id,
-                module_name=module_name,
-                state=state,
-                error_message=data.get("error_message"),
-                details=data.get("details")
-            )
-            
-            if request_id:
-                request_id_states_cache[request_id] = module_state
-                print(f"[ModuleState] Stored state for request_id: {request_id}")
-            
-            print(f"[ModuleState] Updated state for {agent_id}.{module_name}: {state}")
-            
-        except Exception as e:
-            print("[ModuleState] Error parsing module state:", e)
+# ============================================================================
+# BACKGROUND TASKS
+# ============================================================================
 
-    await nc.subscribe(HEARTBEAT_SUBJECT, cb=heartbeat_handler)
-    await nc.subscribe("agent.module.state", cb=module_state_handler)
-    print(f"[Cache] Subscribed to {HEARTBEAT_SUBJECT} and agent.module.state")
+async def nats_connect_task():
+    """Connect to NATS and set up subscriptions"""
+    await nats_client.connect(
+        nats_settings.servers,
+        name="server",
+        verbose=True,
+        reconnect_time_wait=0
+    )
+    print(f"[NATS] Connected to {config.NATS_URL}")
     
-    # Subscribe to existing agents after delay
-    print("[Startup] Scheduling subscription to existing agents...")
-    asyncio.create_task(subscribe_existing_agents())
-
-
-async def subscribe_to_agent_results(agent_id: str):
-    """Subscribe to result topics for a specific agent using DBOS workflow"""
-    agent_info = agent_cache.get(agent_id)
-    if agent_info and agent_info.config:
-        modules_spec = agent_info.config.get("agent", {}).get("modules", {}).get("spec", {})
-        await setup_agent_subscriptions(agent_id, modules_spec)
-
-
-async def cleanup_agents():
-    """Background cleanup task to mark dead agents"""
-    while True:
-        now = datetime.now(timezone.utc)
-        for agent_id, info in agent_cache.items():
-            if (now - info.last_seen) > timedelta(seconds=HEARTBEAT_TIMEOUT):
-                if info.alive:
-                    info.alive = False
-                    print(f"[Cache] Agent {agent_id} marked DEAD (last seen {info.last_seen})")
-        await asyncio.sleep(HEARTBEAT_INTERVAL)
-
-
-async def subscribe_existing_agents():
-    """Subscribe to result topics for existing agents"""
-    print("[Startup] Waiting for initial heartbeats...")
+    # Subscribe to heartbeats and module states
+    await nats_client.subscribe(config.HEARTBEAT_SUBJECT, cb=handle_heartbeat)
+    await nats_client.subscribe("agent.module.state", cb=handle_module_state)
+    print(f"[NATS] Subscribed to control topics")
+    
+    # Wait for initial heartbeats, then subscribe to existing agents
     await asyncio.sleep(2)
+    print(f"[Startup] Subscribing to {len(agent_cache.agents)} existing agents...")
     
-    print(f"[Startup] Found {len(agent_cache)} agents in cache, subscribing...")
-    for agent_id in list(agent_cache.keys()):
-        print(f"[Startup] Subscribing to results for existing agent: {agent_id}")
+    for agent_id, agent in agent_cache.agents.items():
         try:
-            await subscribe_to_agent_results(agent_id)
-            print(f"[Startup] Successfully subscribed for agent: {agent_id}")
+            module_specs = agent.config.get("agent", {}).get("modules", {}).get("spec", {})
+            await setup_agent_subscriptions_workflow(agent_id, module_specs)
+            print(f"[Startup] Subscribed to agent: {agent_id}")
         except Exception as e:
-            print(f"[Startup] Error subscribing for agent {agent_id}: {e}")
+            print(f"[Startup] Error subscribing to {agent_id}: {e}")
 
+async def agent_cleanup_task():
+    """Periodically mark dead agents"""
+    while True:
+        agent_cache.mark_dead_agents(config.HEARTBEAT_TIMEOUT)
+        await asyncio.sleep(config.HEARTBEAT_INTERVAL)
 
-# ======== FASTAPI STARTUP ========
+# ============================================================================
+# FASTAPI APPLICATION
+# ============================================================================
+
+app = FastAPI(
+    title="Agent Server",
+    version="2.0",
+    description="Workflow-focused agent coordination server"
+)
+
+# Execution queue for async workflows
+execution_queue = Queue("module_execution", worker_concurrency=10)
 
 @app.on_event("startup")
 async def startup_event():
+    """Initialize DBOS and background tasks"""
     DBOS.launch()
-    print("[DBOS] Launched successfully")
-    asyncio.create_task(nats_connect())
-    asyncio.create_task(cleanup_agents())
+    print("[DBOS] Launched")
+    asyncio.create_task(nats_connect_task())
+    asyncio.create_task(agent_cleanup_task())
 
-
-# ======== API ROUTES ========
+# ============================================================================
+# API ROUTES - HEALTH & AGENTS
+# ============================================================================
 
 @app.get("/")
 async def root():
+    """Health check and basic stats"""
     return {
         "status": "ok",
-        "total_agents": len(agent_cache),
-        "alive_agents": len([a for a in agent_cache.values() if a.alive]),
+        "total_agents": len(agent_cache.agents),
+        "alive_agents": len(agent_cache.get_alive()),
+        "total_workflows": len(workflow_state.workflows)
     }
 
+@app.get("/agents")
+async def list_all_agents():
+    """Get all agents (alive and dead)"""
+    return agent_cache.agents
 
-@app.get("/agents", response_model=Dict[str, AgentInfo])
-async def get_all_agents():
-    """Get all agents (alive and dead) with metadata."""
-    return agent_cache
+@app.get("/agents/alive")
+async def list_alive_agents():
+    """Get only alive agents"""
+    return agent_cache.get_alive()
 
+@app.get("/agents/dead")
+async def list_dead_agents():
+    """Get only dead agents"""
+    return agent_cache.get_dead()
 
-@app.get("/agents/alive", response_model=Dict[str, AgentInfo])
-async def get_alive_agents():
-    """Get only currently alive agents."""
-    return {aid: info for aid, info in agent_cache.items() if info.alive}
-
-
-@app.get("/agents/dead", response_model=Dict[str, AgentInfo])
-async def get_dead_agents():
-    """Get only agents considered dead (missed heartbeat)."""
-    return {aid: info for aid, info in agent_cache.items() if not info.alive}
-
-
-@app.get("/agents/{agent_id}", response_model=AgentInfo)
-async def get_agent(agent_id: str):
-    """Get detailed info about a specific agent."""
+@app.get("/agents/{agent_id}")
+async def get_agent_info(agent_id: str):
+    """Get detailed info about specific agent"""
     agent = agent_cache.get(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     return agent
 
-
-@app.get("/agents/{agent_id}/results/{request_id}")
-async def get_agent_result(agent_id: str, request_id: str):
-    """Get result for a specific agent and request ID."""
-    agent_results = results_cache.get(agent_id, {})
-    result = agent_results.get(request_id)
-    
-    if not result:
-        raise HTTPException(status_code=404, detail="Result not found")
-        
-    return result
-
-
-@app.get("/agents/{agent_id}/results")
-async def get_agent_results(agent_id: str):
-    """Get all results for a specific agent."""
-    return results_cache.get(agent_id, {})
-
-
-@app.delete("/agents/{agent_id}/results/{request_id}")
-async def delete_agent_result(agent_id: str, request_id: str):
-    """Delete a specific result for an agent."""
-    agent_results = results_cache.get(agent_id, {})
-    if request_id in agent_results:
-        del agent_results[request_id]
-        return {"message": "Result deleted"}
-    else:
-        raise HTTPException(status_code=404, detail="Result not found")
-
-
-# ======== MODULE EXECUTION ROUTES ========
+# ============================================================================
+# API ROUTES - MODULE EXECUTION
+# ============================================================================
 
 @app.post("/agent/{agent_id}/{module_name}")
-async def run_module_sync(
-    agent_id: str, 
-    module_name: str, 
-    module_request: Dict[str, Any], 
+async def execute_module(
+    agent_id: str,
+    module_name: str,
+    module_request: Dict[str, Any],
     untracked: bool = Query(False)
 ):
-    """Execute module synchronously using durable workflow"""
-    result = await run_module(agent_id, module_name, module_request, untracked)
+    """Execute module synchronously via durable workflow"""
+    result = await execute_module_workflow(
+        agent_id,
+        module_name,
+        module_request,
+        untracked
+    )
     return result
 
-
 @app.post("/agent/{agent_id}/{module_name}/async")
-async def run_module_async(
-    agent_id: str, 
-    module_name: str, 
+async def execute_module_async(
+    agent_id: str,
+    module_name: str,
     module_request: Dict[str, Any]
 ):
     """Enqueue module execution for async processing"""
-    if "id" not in module_request:
-        module_request["id"] = str(uuid.uuid4())
-    
-    # Enqueue the workflow
-    handle = module_execution_queue.enqueue(
-        run_module, 
-        agent_id, 
-        module_name, 
+    handle = execution_queue.enqueue(
+        execute_module_workflow,
+        agent_id,
+        module_name,
         module_request,
-        False  # untracked
+        False
     )
     
     return {
-        "message": "Module execution enqueued",
-        "id": module_request["id"],
+        "status": "enqueued",
         "workflow_id": handle.workflow_id
     }
 
-
-# ======== MODULE STATE ROUTES ========
-
-@app.get("/modules/states")
-async def get_all_module_states():
-    """Get all module states across all agents."""
-    return request_id_states_cache
-
-
-@app.get("/modules/states/{request_id}")
-async def get_module_state_by_request_id(request_id: str):
-    """Get module state by request ID."""
-    module_state = request_id_states_cache.get(request_id)
-    
-    if not module_state:
-        raise HTTPException(status_code=404, detail="Module state not found for this request ID")
-        
-    return module_state.dict()
-
-
-# ======== WORKFLOW MANAGEMENT ROUTES ========
+# ============================================================================
+# API ROUTES - WORKFLOW MANAGEMENT
+# ============================================================================
 
 @app.get("/workflows")
 async def list_workflows(
     status: Optional[str] = None,
     limit: int = Query(100, le=1000)
 ):
-    """List recent workflows"""
+    """
+    List workflows with optional status filter.
+    Status must be one of: RUNNING, COMPLETED, FAILED
+    """
+    if status and status not in ["RUNNING", "COMPLETED", "FAILED"]:
+        raise HTTPException(
+            status_code=400, 
+            detail="Status must be RUNNING, COMPLETED, or FAILED"
+        )
+    
+    workflows = []
+    
+    # Get workflows from our cache
+    workflow_items = list(workflow_state.workflows.items())
+    if len(workflow_items) > limit:
+        workflow_items = workflow_items[-limit:]
+    
+    for workflow_id, workflow_data in workflow_items:
+        current_state = workflow_state.get_current_state(workflow_id)
+        
+        # Apply status filter
+        if status and current_state != status:
+            continue
+        
+        state_history = workflow_state.state_history.get(workflow_id, [])
+        
+        workflows.append({
+            "workflow_id": workflow_id,
+            "agent_id": workflow_data.get("agent_id"),
+            "module_name": workflow_data.get("module_name"),
+            "current_state": current_state,
+            "created_at": workflow_data.get("created_at"),
+            "state_transitions": len(state_history)
+        })
+    
+    # Also try to get DBOS workflows
+    dbos_workflows = []
     try:
-        workflows = DBOS.list_workflows(limit=limit)
-        
+        dbos_wf_list = DBOS.list_workflows(limit=limit)
         if status:
-            workflows = [w for w in workflows if w.status == status]
+            dbos_wf_list = [w for w in dbos_wf_list if w.status == status]
         
-        return {
-            "workflows": [
-                {
-                    "workflow_id": w.workflow_id,
-                    "status": w.status,
-                    "workflow_name": getattr(w, 'workflow_name', 'unknown'),
-                    "started_at": getattr(w, 'started_at', None),
-                    "execution_id": getattr(w, 'execution_id', None)
-                }
-                for w in workflows
-            ]
-        }
+        dbos_workflows = [
+            {
+                "workflow_id": w.workflow_id,
+                "status": w.status,
+                "workflow_name": getattr(w, 'workflow_name', 'unknown'),
+                "started_at": getattr(w, 'started_at', None)
+            }
+            for w in dbos_wf_list
+        ]
     except Exception as e:
-        print(f"[Workflows] Error listing workflows: {e}")
-        return {"workflows": [], "error": str(e)}
+        print(f"[Workflows] Error listing DBOS workflows: {e}")
+    
+    return {
+        "workflows": workflows,
+        "dbos_workflows": dbos_workflows,
+        "total": len(workflow_state.workflows)
+    }
 
-
-@app.get("/workflows/{workflow_id}/status")
+@app.get("/workflows/{workflow_id}")
 async def get_workflow_status(workflow_id: str):
-    """Check status of a workflow execution"""
+    """Get detailed status of a specific workflow"""
+    # Check our cache first
+    if workflow_id not in workflow_state.workflows:
+        # Try DBOS
+        try:
+            dbos_status = DBOS.retrieve_workflow(workflow_id)
+            return {
+                "workflow_id": workflow_id,
+                "source": "dbos",
+                "status": dbos_status.status,
+                "result": dbos_status.get_result() if dbos_status.status == "SUCCESS" else None
+            }
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=f"Workflow not found: {str(e)}")
+    
+    # Get from our cache
+    workflow_data = workflow_state.workflows[workflow_id]
+    state_history = workflow_state.state_history.get(workflow_id, [])
+    current_state = workflow_state.get_current_state(workflow_id)
+    
+    # Also try to get DBOS status
+    dbos_status = None
     try:
         status = DBOS.retrieve_workflow(workflow_id)
-        return {
-            "workflow_id": workflow_id,
+        dbos_status = {
             "status": status.status,
             "result": status.get_result() if status.status == "SUCCESS" else None
         }
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Workflow not found: {str(e)}")
-
+    except Exception:
+        pass
+    
+    return {
+        "workflow_id": workflow_id,
+        "agent_id": workflow_data.get("agent_id"),
+        "module_name": workflow_data.get("module_name"),
+        "current_state": current_state,
+        "created_at": workflow_data.get("created_at"),
+        "state_history": state_history,
+        "request": workflow_data.get("request"),
+        "dbos_status": dbos_status
+    }
 
 @app.post("/workflows/{workflow_id}/cancel")
 async def cancel_workflow(workflow_id: str):
     """Cancel a running workflow"""
+    # Update our cache
+    if workflow_id in workflow_state.workflows:
+        workflow_state.set_state(workflow_id, "FAILED", cancelled=True)
+    
+    # Try to cancel in DBOS
     try:
         DBOS.cancel_workflow(workflow_id)
-        return {"message": "Workflow cancelled", "workflow_id": workflow_id}
+        return {
+            "workflow_id": workflow_id,
+            "status": "FAILED",
+            "message": "Workflow cancelled successfully"
+        }
     except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        return {
+            "workflow_id": workflow_id,
+            "status": "FAILED",
+            "message": f"Cancelled in cache. DBOS error: {str(e)}"
+        }
 
-@app.get("/debug/cache")
-async def debug_cache():
-    """Debug endpoint to see current cache state"""
+# ============================================================================
+# DEBUG ENDPOINTS
+# ============================================================================
+
+@app.get("/debug/state")
+async def debug_state():
+    """Debug endpoint to inspect internal state"""
     return {
-        "agent_cache_keys": list(agent_cache.keys()),
-        "results_cache_keys": {
-            agent_id: list(results.keys()) 
-            for agent_id, results in results_cache.items()
+        "agents": {
+            "total": len(agent_cache.agents),
+            "alive": len(agent_cache.get_alive()),
+            "agent_ids": list(agent_cache.agents.keys())
         },
-        "results_cache_full": results_cache,
-        "module_states_keys": list(request_id_states_cache.keys())
+        "workflows": {
+            "total": len(workflow_state.workflows),
+            "workflow_ids": list(workflow_state.workflows.keys())[-10:],  # Last 10
+            "states": {
+                "RUNNING": len([w for w in workflow_state.workflows.keys() 
+                               if workflow_state.get_current_state(w) == "RUNNING"]),
+                "COMPLETED": len([w for w in workflow_state.workflows.keys() 
+                                 if workflow_state.get_current_state(w) == "COMPLETED"]),
+                "FAILED": len([w for w in workflow_state.workflows.keys() 
+                              if workflow_state.get_current_state(w) == "FAILED"])
+            }
+        }
     }

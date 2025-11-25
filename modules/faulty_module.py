@@ -39,15 +39,15 @@ class FaultyModule(BaseWorker):
         self.logger.info(f"{self.name}: Listening on {self.sub_in}")
 
     async def handle(self, msg: Msg):
-        request_id = None
+        workflow_id = None
         try:
             payload = json.loads(msg.data.decode())
             self.logger.info(f"{self.name}: Received {payload}")
-            request_id = payload.get("id")  # Extract request ID for state tracking
+            workflow_id = payload.get("workflow_id")  # Extract workflow ID for state tracking
 
             # Report that we're running this specific request
-            if request_id:
-                await self._report_state("running", details={"action": "processing_request"}, request_id=request_id)
+            if workflow_id:
+                await self._report_state("RUNNING", details={"action": "processing_request"}, request_id=workflow_id)
 
             # Simulate delay
             if payload.get("delay"):
@@ -64,9 +64,9 @@ class FaultyModule(BaseWorker):
                 self.logger.warning(
                     f"{self.name}: Duplicate message ignored: {message_id}"
                 )
-                # Report error with request ID
-                if request_id:
-                    await self._report_state("error", "Duplicate message", details={"action": "duplicate_ignored"}, request_id=request_id)
+                # Report error with workflow ID
+                if workflow_id:
+                    await self._report_state("FAILED", "Duplicate message", details={"action": "duplicate_ignored"}, request_id=workflow_id)
                 return
             if message_id:
                 self.processed_ids.add(message_id)
@@ -76,17 +76,18 @@ class FaultyModule(BaseWorker):
                 "from_module": self.name,
                 "processed_at": time.time(),
                 "input": payload,
+                "workflow_id": workflow_id
             }
             await self.nc.publish(self.sub_out, json.dumps(response).encode())
             
-            # Report completion with request ID
-            if request_id:
-                await self._report_state("completed", details={"action": "request_completed"}, request_id=request_id)
+            # Report completion with workflow ID
+            if workflow_id:
+                await self._report_state("COMPLETED", details={"action": "request_completed"}, request_id=workflow_id)
 
         except Exception as e:
             self.logger.exception(f"{self.name}: Failed during handle")
             await self.nc.publish(self.sub_err, str(e).encode())
             
-            # Report error with request ID
-            if request_id:
-                await self._report_state("error", str(e), details={"action": "request_failed"}, request_id=request_id)
+            # Report error with workflow ID
+            if workflow_id:
+                await self._report_state("FAILED", str(e), details={"action": "request_failed"}, request_id=workflow_id)

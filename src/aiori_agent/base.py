@@ -16,10 +16,8 @@ logger = logging.getLogger("agent")
 
 
 class ModuleStateEnum(str, Enum):
-    STARTED = "started"
     RUNNING = "running"
     COMPLETED = "completed"
-    ERROR = "error"
     FAILED = "failed"
 
 
@@ -46,7 +44,7 @@ class BaseWorker:
             "state": state,
             "error_message": error_message,
             "details": details,
-            "request_id": request_id  # Include request_id if available
+            "workflow_id": request_id  # Use workflow_id instead of request_id
         }
         try:
             await self.nc.publish("agent.module.state", json.dumps(state_data).encode())
@@ -66,18 +64,18 @@ class BaseWorker:
     async def __run__(self, crash_handler):
         try:
             self.running = True
-            await self._report_state("started")
+            await self._report_state("RUNNING")
             await self.run()
-            await self._report_state("completed")
+            await self._report_state("COMPLETED")
         except Exception as ex:
             self.running = False
-            await self._report_state("error", str(ex))
+            await self._report_state("FAILED", str(ex))
             await crash_handler(self.name, ex)
 
     def start(self, crash_handler):
         self.task = asyncio.create_task(self.__run__(crash_handler=crash_handler))
         # Report that the module is now running (task created)
-        asyncio.create_task(self._report_state("running"))
+        asyncio.create_task(self._report_state("RUNNING"))
 
     async def stop(self, msg="Exclusive stop", timeout=20):
         self.task.cancel(msg=msg)

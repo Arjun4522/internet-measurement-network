@@ -19,9 +19,10 @@ class WorkingModule(BaseWorker):
     def __init__(self, name: str, agent, nc, logger, shared):
         super().__init__(name, agent, nc, logger, shared)
 
-        self.sub_in = f"agent.{self.agent.agent_id}.{self.name}.in"
-        self.sub_out = f"agent.{self.agent.agent_id}.{self.name}.out"
-        self.sub_err = f"agent.{self.agent.agent_id}.{self.name}.error"
+        # Use simple naming pattern like the ping module
+        self.sub_in = f"agent.{self.agent.agent_id}.working_module.in"
+        self.sub_out = f"agent.{self.agent.agent_id}.working_module.out"
+        self.sub_err = f"agent.{self.agent.agent_id}.working_module.error"
 
     def serializer(self) -> Type[MeasurementQuery]:
         return EchoQuery
@@ -40,30 +41,47 @@ class WorkingModule(BaseWorker):
         """
         Processes incoming message and sends output.
         """
-        request_id = None
+        workflow_id = None
         try:
             data = msg.data.decode()
             self.logger.debug(f"{self.name}: Received {data}")
             payload = json.loads(data)
-            request_id = payload.get("id")  # Extract request ID for state tracking
+            workflow_id = payload.get("workflow_id")  # Extract workflow ID for state tracking
             
             # Report that we're running this specific request
-            if request_id:
-                await self._report_state("running", details={"action": "processing_request"}, request_id=request_id)
+            state_data = {
+                "agent_id": self.agent.agent_id,
+                "module_name": self.name,
+                "state": "RUNNING",
+                "workflow_id": workflow_id
+            }
+            await self.nc.publish("agent.module.state", json.dumps(state_data).encode())
             
             payload["processed_at"] = time.time()
             payload["from_module"] = self.name
+            payload["workflow_id"] = workflow_id
 
             await self.nc.publish(self.sub_out, json.dumps(payload).encode())
             self.logger.debug(f"{self.name}: Published to {self.sub_out}")
             
-            # Report completion with request ID
-            if request_id:
-                await self._report_state("completed", details={"action": "request_completed"}, request_id=request_id)
+            # Report completion with workflow ID
+            state_data = {
+                "agent_id": self.agent.agent_id,
+                "module_name": self.name,
+                "state": "COMPLETED",
+                "workflow_id": workflow_id
+            }
+            await self.nc.publish("agent.module.state", json.dumps(state_data).encode())
         except Exception as e:
             self.logger.exception(f"{self.name}: Error during handle")
             await self.nc.publish(self.sub_err, str(e).encode())
             
-            # Report error with request ID
-            if request_id:
-                await self._report_state("error", str(e), details={"action": "request_failed"}, request_id=request_id)
+            # Report error with workflow ID
+            state_data = {
+                "agent_id": self.agent.agent_id,
+                "module_name": self.name,
+                "state": "FAILED",
+                "error_message": str(e),
+                "workflow_id": workflow_id
+            }
+            await self.nc.publish("agent.module.state", json.dumps(state_data).encode())

@@ -99,7 +99,7 @@ class ModuleManager(FileSystemEventHandler):
                 state_data = {
                     "agent_id": self.agent.agent_id,
                     "module_name": module_name,
-                    "state": "stopped",
+                    "state": "STOPPED",
                     "details": {"action": "module_stopped"}
                 }
                 await self.nc.publish("agent.module.state", json.dumps(state_data).encode())
@@ -139,14 +139,14 @@ class ModuleManager(FileSystemEventHandler):
                     worker.start(self._on_crash)  # Presumed to spawn internal task
                     self.running_workers[module_name] = worker
                     logger.info(f"✅ Worker started: {module_name}")
-                    # Report module state to NATS
-                    state_data = {
-                        "agent_id": self.agent.agent_id,
-                        "module_name": module_name,
-                        "state": "started",
-                        "details": {"action": "module_loaded"}
-                    }
-                    await self.nc.publish("agent.module.state", json.dumps(state_data).encode())
+                # Report module state to NATS
+                state_data = {
+                    "agent_id": self.agent.agent_id,
+                    "module_name": module_name,
+                    "state": "STARTED",
+                    "details": {"action": "module_loaded"}
+                }
+                await self.nc.publish("agent.module.state", json.dumps(state_data).encode())
 
         except Exception as e:
             logger.error(f"❌ Error loading module `{module_name}`: {e}")
