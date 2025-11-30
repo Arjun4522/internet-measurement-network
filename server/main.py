@@ -48,6 +48,8 @@ class WorkflowState:
         self.workflows: Dict[str, Dict[str, Any]] = {}
         # workflow_id -> list of state transitions
         self.state_history: Dict[str, list] = {}
+        # workflow_id -> agent_id mapping for health checking
+        self.workflow_agents: Dict[str, str] = {}
         # Add persistence
         self.persistence = PersistenceManager() if PersistenceManager else None
         self._load_persistent_workflows()
@@ -77,6 +79,7 @@ class WorkflowState:
         }
         
         self.workflows[workflow_id] = workflow_data
+        self.workflow_agents[workflow_id] = agent_id  # Track which agent handles this workflow
         
         self.state_history[workflow_id] = [{
             "state": "RUNNING",
@@ -114,12 +117,43 @@ class WorkflowState:
         self.state_history[workflow_id].append(state_entry)
         print(f"[Workflow] {workflow_id}: {state}")
         
+        # If workflow is completing/failing, remove from agent tracking
+        if state in ["COMPLETED", "FAILED"] and workflow_id in self.workflow_agents:
+            del self.workflow_agents[workflow_id]
+        
         # Persist state transition
         if hasattr(self, 'persistence') and self.persistence:
             try:
                 self.persistence.save_workflow_state(workflow_id, state, timestamp, metadata)
             except Exception as e:
                 print(f"[WorkflowState] Warning: Could not persist state for {workflow_id}: {e}")
+    
+    def check_stale_workflows(self, agent_cache) -> None:
+        """Check for workflows assigned to dead agents and mark them as failed"""
+        try:
+            # Get current running workflows
+            running_workflows = []
+            for workflow_id, states in self.state_history.items():
+                if states and states[-1]["state"] == "RUNNING":
+                    running_workflows.append(workflow_id)
+            
+            # Check if agents for these workflows are still alive
+            for workflow_id in running_workflows:
+                if workflow_id in self.workflow_agents:
+                    agent_id = self.workflow_agents[workflow_id]
+                    agent = agent_cache.get(agent_id)
+                    
+                    # If agent doesn't exist or is dead, mark workflow as failed
+                    if not agent or not agent.alive:
+                        print(f"[Workflow] Marking {workflow_id} as FAILED due to dead agent {agent_id}")
+                        self.set_state(
+                            workflow_id, 
+                            "FAILED", 
+                            reason="Agent died or disconnected",
+                            agent_id=agent_id
+                        )
+        except Exception as e:
+            print(f"[WorkflowState] Error checking stale workflows: {e}")
     
     def get_current_state(self, workflow_id: str) -> Optional[str]:
         """Get current state of a workflow"""
@@ -138,7 +172,8 @@ class AgentCache:
         if self.persistence:
             try:
                 persistent_agents = self.persistence.load_agents()
-                self.agents.update(persistent_agents)
+                for agent_id, agent in persistent_agents.items():
+                    self.agents[agent_id] = agent
                 print(f"[AgentCache] Loaded {len(persistent_agents)} agents from persistent storage")
             except Exception as e:
                 print(f"[AgentCache] Warning: Could not load persistent agents: {e}")
@@ -498,6 +533,16 @@ async def agent_cleanup_task():
         agent_cache.mark_dead_agents(config.HEARTBEAT_TIMEOUT)
         await asyncio.sleep(config.HEARTBEAT_INTERVAL)
 
+async def workflow_cleanup_task():
+    """Periodically check for stale workflows assigned to dead agents"""
+    while True:
+        # Check every 30 seconds
+        await asyncio.sleep(30)
+        try:
+            workflow_state.check_stale_workflows(agent_cache)
+        except Exception as e:
+            print(f"[WorkflowCleanup] Error: {e}")
+
 # ============================================================================
 # FASTAPI APPLICATION
 # ============================================================================
@@ -518,6 +563,7 @@ async def startup_event():
     print("[DBOS] Launched")
     asyncio.create_task(nats_connect_task())
     asyncio.create_task(agent_cleanup_task())
+    asyncio.create_task(workflow_cleanup_task())
 
 # ============================================================================
 # API ROUTES - HEALTH & AGENTS
