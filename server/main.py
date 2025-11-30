@@ -14,6 +14,7 @@ from openapi_schema_validator import validate
 from jsonschema.exceptions import ValidationError
 
 from models import AgentInfo, ModuleStateEnum
+from db.persistence import PersistenceManager
 
 # ============================================================================
 # CONFIGURATION
@@ -47,16 +48,35 @@ class WorkflowState:
         self.workflows: Dict[str, Dict[str, Any]] = {}
         # workflow_id -> list of state transitions
         self.state_history: Dict[str, list] = {}
+        # Add persistence
+        self.persistence = PersistenceManager() if PersistenceManager else None
+        self._load_persistent_workflows()
+    
+    def _load_persistent_workflows(self):
+        """Load workflows from persistent storage on startup"""
+        if self.persistence:
+            try:
+                persistent_workflows = self.persistence.load_workflows()
+                self.workflows.update(persistent_workflows)
+                
+                persistent_states = self.persistence.load_workflow_states()
+                self.state_history.update(persistent_states)
+                
+                print(f"[WorkflowState] Loaded {len(persistent_workflows)} workflows from persistent storage")
+            except Exception as e:
+                print(f"[WorkflowState] Warning: Could not load persistent workflows: {e}")
     
     def create_workflow(self, workflow_id: str, agent_id: str, module_name: str, 
                        request: Dict[str, Any]) -> None:
         """Initialize a new workflow with RUNNING state"""
-        self.workflows[workflow_id] = {
+        workflow_data = {
             "agent_id": agent_id,
             "module_name": module_name,
             "request": request,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        
+        self.workflows[workflow_id] = workflow_data
         
         self.state_history[workflow_id] = [{
             "state": "RUNNING",
@@ -64,6 +84,18 @@ class WorkflowState:
         }]
         
         print(f"[Workflow] Created {workflow_id}: RUNNING")
+        
+        # Persist workflow data
+        if hasattr(self, 'persistence') and self.persistence:
+            try:
+                self.persistence.save_workflow(workflow_id, workflow_data)
+                self.persistence.save_workflow_state(
+                    workflow_id, 
+                    "RUNNING", 
+                    datetime.now(timezone.utc).isoformat()
+                )
+            except Exception as e:
+                print(f"[WorkflowState] Warning: Could not persist workflow {workflow_id}: {e}")
     
     def set_state(self, workflow_id: str, state: str, **metadata) -> None:
         """Set workflow state - only RUNNING, COMPLETED, or FAILED allowed"""
@@ -73,13 +105,21 @@ class WorkflowState:
         if workflow_id not in self.state_history:
             self.state_history[workflow_id] = []
         
+        timestamp = datetime.now(timezone.utc).isoformat()
         state_entry = {
             "state": state,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": timestamp,
             **metadata
         }
         self.state_history[workflow_id].append(state_entry)
         print(f"[Workflow] {workflow_id}: {state}")
+        
+        # Persist state transition
+        if hasattr(self, 'persistence') and self.persistence:
+            try:
+                self.persistence.save_workflow_state(workflow_id, state, timestamp, metadata)
+            except Exception as e:
+                print(f"[WorkflowState] Warning: Could not persist state for {workflow_id}: {e}")
     
     def get_current_state(self, workflow_id: str) -> Optional[str]:
         """Get current state of a workflow"""
@@ -90,6 +130,18 @@ class AgentCache:
     """Manages agent lifecycle and metadata"""
     def __init__(self):
         self.agents: Dict[str, AgentInfo] = {}
+        self.persistence = PersistenceManager() if PersistenceManager else None
+        self._load_persistent_agents()
+    
+    def _load_persistent_agents(self):
+        """Load agents from persistent storage on startup"""
+        if self.persistence:
+            try:
+                persistent_agents = self.persistence.load_agents()
+                self.agents.update(persistent_agents)
+                print(f"[AgentCache] Loaded {len(persistent_agents)} agents from persistent storage")
+            except Exception as e:
+                print(f"[AgentCache] Warning: Could not load persistent agents: {e}")
     
     def update_heartbeat(self, agent_id: str, hostname: str, config: Dict[str, Any]) -> AgentInfo:
         """Update or create agent from heartbeat"""
@@ -114,6 +166,13 @@ class AgentCache:
             )
             self.agents[agent_id] = agent
             print(f"[AgentCache] Registered: {agent_id}")
+        
+        # Persist agent data
+        if hasattr(self, 'persistence') and self.persistence:
+            try:
+                self.persistence.save_agent(agent)
+            except Exception as e:
+                print(f"[AgentCache] Warning: Could not persist agent {agent_id}: {e}")
         
         return agent
     
