@@ -1,12 +1,13 @@
 """
 Database persistence layer for AgentCache and WorkflowState
 """
-import sqlite3
 import json
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 import os
 import sys
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 # Handle relative imports
 try:
@@ -31,75 +32,79 @@ except ImportError:
 class PersistenceManager:
     """Manages persistence of agent and workflow state data"""
     
-    def __init__(self, db_path: str = "db/data.db"):
-        self.db_path = db_path
+    def __init__(self, db_url: str = None):
+        self.db_url = db_url or os.environ.get("DBOS_SYSTEM_DATABASE_URL", "postgresql://imn_user:imn_password@postgres:5432/imn_db")
         self.init_tables()
     
     def get_connection(self):
         """Get database connection"""
-        conn = sqlite3.connect(self.db_path)
-        # Enable foreign key constraints
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+        return psycopg2.connect(self.db_url, cursor_factory=RealDictCursor)
     
     def init_tables(self):
         """Initialize database tables for custom persistence"""
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        # Create agents table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS persistent_agents (
-                agent_id TEXT PRIMARY KEY,
-                alive INTEGER NOT NULL,
-                hostname TEXT NOT NULL,
-                last_seen TEXT NOT NULL,
-                config TEXT NOT NULL,
-                first_seen TEXT NOT NULL,
-                total_heartbeats INTEGER NOT NULL
-            )
-        ''')
-        
-        # Create workflows table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS persistent_workflows (
-                workflow_id TEXT PRIMARY KEY,
-                agent_id TEXT NOT NULL,
-                module_name TEXT NOT NULL,
-                request TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-        ''')
-        
-        # Create workflow state history table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS persistent_workflow_states (
-                workflow_id TEXT NOT NULL,
-                state TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                metadata TEXT,
-                FOREIGN KEY (workflow_id) REFERENCES persistent_workflows (workflow_id)
-            )
-        ''')
-        
-        # Create indexes for better performance
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_persistent_agents_alive 
-            ON persistent_agents (alive)
-        ''')
-        
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_persistent_workflows_agent 
-            ON persistent_workflows (agent_id)
-        ''')
-        
-        cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_persistent_workflow_states_workflow 
-            ON persistent_workflow_states (workflow_id)
-        ''')
-        
-        conn.commit()
-        conn.close()
+        try:
+            # Create agents table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS persistent_agents (
+                    agent_id VARCHAR(255) PRIMARY KEY,
+                    alive BOOLEAN NOT NULL,
+                    hostname VARCHAR(255) NOT NULL,
+                    last_seen TIMESTAMP NOT NULL,
+                    config JSONB NOT NULL,
+                    first_seen TIMESTAMP NOT NULL,
+                    total_heartbeats INTEGER NOT NULL
+                )
+            ''')
+            
+            # Create workflows table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS persistent_workflows (
+                    workflow_id VARCHAR(255) PRIMARY KEY,
+                    agent_id VARCHAR(255) NOT NULL,
+                    module_name VARCHAR(255) NOT NULL,
+                    request JSONB NOT NULL,
+                    created_at TIMESTAMP NOT NULL
+                )
+            ''')
+            
+            # Create workflow state history table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS persistent_workflow_states (
+                    id SERIAL PRIMARY KEY,
+                    workflow_id VARCHAR(255) NOT NULL,
+                    state VARCHAR(50) NOT NULL,
+                    timestamp TIMESTAMP NOT NULL,
+                    metadata JSONB,
+                    FOREIGN KEY (workflow_id) REFERENCES persistent_workflows (workflow_id)
+                )
+            ''')
+            
+            # Create indexes for better performance
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_persistent_agents_alive 
+                ON persistent_agents (alive)
+            ''')
+            
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_persistent_workflows_agent 
+                ON persistent_workflows (agent_id)
+            ''')
+            
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_persistent_workflow_states_workflow 
+                ON persistent_workflow_states (workflow_id)
+            ''')
+            
+            conn.commit()
+        except Exception as e:
+            # Log the error but don't fail - tables might already exist
+            print(f"Warning: Error initializing tables: {e}")
+            conn.rollback()
+        finally:
+            conn.close()
     
     def save_agent(self, agent: AgentInfo):
         """Save agent to database"""
@@ -107,16 +112,23 @@ class PersistenceManager:
         cursor = conn.cursor()
         
         cursor.execute('''
-            INSERT OR REPLACE INTO persistent_agents 
+            INSERT INTO persistent_agents 
             (agent_id, alive, hostname, last_seen, config, first_seen, total_heartbeats)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (agent_id) 
+            DO UPDATE SET 
+                alive = EXCLUDED.alive,
+                hostname = EXCLUDED.hostname,
+                last_seen = EXCLUDED.last_seen,
+                config = EXCLUDED.config,
+                total_heartbeats = EXCLUDED.total_heartbeats
         ''', (
             agent.agent_id,
-            int(agent.alive),
+            agent.alive,
             agent.hostname,
-            agent.last_seen.isoformat(),
+            agent.last_seen,
             json.dumps(agent.config),
-            agent.first_seen.isoformat(),
+            agent.first_seen,
             agent.total_heartbeats
         ))
         
@@ -154,7 +166,7 @@ class PersistenceManager:
         conn = self.get_connection()
         cursor = conn.cursor()
         
-        cursor.execute('DELETE FROM persistent_agents WHERE agent_id = ?', (agent_id,))
+        cursor.execute('DELETE FROM persistent_agents WHERE agent_id = %s', (agent_id,))
         
         conn.commit()
         conn.close()
@@ -165,9 +177,15 @@ class PersistenceManager:
         cursor = conn.cursor()
         
         cursor.execute('''
-            INSERT OR REPLACE INTO persistent_workflows 
+            INSERT INTO persistent_workflows 
             (workflow_id, agent_id, module_name, request, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (workflow_id) 
+            DO UPDATE SET 
+                agent_id = EXCLUDED.agent_id,
+                module_name = EXCLUDED.module_name,
+                request = EXCLUDED.request,
+                created_at = EXCLUDED.created_at
         ''', (
             workflow_id,
             workflow_data.get("agent_id", ""),
@@ -187,12 +205,12 @@ class PersistenceManager:
         cursor.execute('''
             INSERT INTO persistent_workflow_states 
             (workflow_id, state, timestamp, metadata)
-            VALUES (?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s)
         ''', (
             workflow_id,
             state,
             timestamp,
-            json.dumps(metadata) if metadata else None
+            json.dumps(metadata) if metadata else '{}'
         ))
         
         conn.commit()

@@ -1,6 +1,7 @@
 rich
 wheel
 typer
+dbos
 fastapi[standard]
 nats-py[nkeys]
 watchdog
@@ -11,3 +12,4 @@ nats-observe @ git+https://github.com/arnavdas88/nats-observatory
 opentelemetry-api
 opentelemetry-sdk
 opentelemetry-exporter-otlp
+psycopg2-binary
