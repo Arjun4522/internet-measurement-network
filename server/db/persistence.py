@@ -145,18 +145,55 @@ class PersistenceManager:
         
         agents = {}
         for row in rows:
-            agent_id, alive, hostname, last_seen, config, first_seen, total_heartbeats = row
+            # RealDictCursor returns dict-like objects
+            try:
+                # Safely parse datetime fields
+                last_seen_val = row['last_seen']
+                if isinstance(last_seen_val, datetime):
+                    last_seen_dt = last_seen_val
+                elif last_seen_val:
+                    last_seen_dt = datetime.fromisoformat(str(last_seen_val))
+                else:
+                    last_seen_dt = datetime.now(timezone.utc)
+            except (ValueError, TypeError) as e:
+                print(f"[Persistence] Warning: Invalid last_seen format '{last_seen_val}': {e}")
+                last_seen_dt = datetime.now(timezone.utc)
+            
+            try:
+                first_seen_val = row['first_seen']
+                if isinstance(first_seen_val, datetime):
+                    first_seen_dt = first_seen_val
+                elif first_seen_val:
+                    first_seen_dt = datetime.fromisoformat(str(first_seen_val))
+                else:
+                    first_seen_dt = datetime.now(timezone.utc)
+            except (ValueError, TypeError) as e:
+                print(f"[Persistence] Warning: Invalid first_seen format '{first_seen_val}': {e}")
+                first_seen_dt = datetime.now(timezone.utc)
+            
+            # Safely parse config JSON
+            try:
+                config_val = row['config']
+                if isinstance(config_val, dict):
+                    config_dict = config_val
+                elif config_val:
+                    config_dict = json.loads(str(config_val))
+                else:
+                    config_dict = {}
+            except (json.JSONDecodeError, TypeError) as e:
+                print(f"[Persistence] Warning: Invalid config JSON '{config_val}': {e}")
+                config_dict = {}
             
             agent = AgentInfo(
-                agent_id=agent_id,
-                alive=bool(alive),
-                hostname=hostname,
-                last_seen=datetime.fromisoformat(last_seen),
-                config=json.loads(config) if config else {},
-                first_seen=datetime.fromisoformat(first_seen),
-                total_heartbeats=total_heartbeats
+                agent_id=row['agent_id'],
+                alive=bool(row['alive']),
+                hostname=row['hostname'],
+                last_seen=last_seen_dt,
+                config=config_dict,
+                first_seen=first_seen_dt,
+                total_heartbeats=row['total_heartbeats'] or 0
             )
-            agents[agent_id] = agent
+            agents[row['agent_id']] = agent
         
         conn.close()
         return agents
@@ -226,13 +263,12 @@ class PersistenceManager:
         
         workflows = {}
         for row in rows:
-            workflow_id, agent_id, module_name, request, created_at = row
-            
-            workflows[workflow_id] = {
-                "agent_id": agent_id,
-                "module_name": module_name,
-                "request": json.loads(request) if request else {},
-                "created_at": created_at
+            # RealDictCursor returns dict-like objects
+            workflows[row['workflow_id']] = {
+                "agent_id": row['agent_id'],
+                "module_name": row['module_name'],
+                "request": row['request'] if isinstance(row['request'], dict) else json.loads(row['request']) if row['request'] else {},
+                "created_at": row['created_at'] if isinstance(row['created_at'], datetime) else str(row['created_at'])
             }
         
         conn.close()
@@ -248,18 +284,20 @@ class PersistenceManager:
         
         states = {}
         for row in rows:
-            workflow_id, state, timestamp, metadata = row
+            # RealDictCursor returns dict-like objects
+            workflow_id = row['workflow_id']
             
             if workflow_id not in states:
                 states[workflow_id] = []
             
             state_entry = {
-                "state": state,
-                "timestamp": timestamp
+                "state": row['state'],
+                "timestamp": row['timestamp'] if isinstance(row['timestamp'], datetime) else str(row['timestamp'])
             }
             
-            if metadata:
-                state_entry.update(json.loads(metadata))
+            if row['metadata']:
+                metadata = row['metadata'] if isinstance(row['metadata'], dict) else json.loads(row['metadata'])
+                state_entry.update(metadata)
             
             states[workflow_id].append(state_entry)
         

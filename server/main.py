@@ -68,6 +68,39 @@ class WorkflowState:
             except Exception as e:
                 print(f"[WorkflowState] Warning: Could not load persistent workflows: {e}")
     
+    def sync_with_database(self):
+        """Sync in-memory cache with database"""
+        if self.persistence:
+            try:
+                # Load fresh data from database
+                fresh_workflows = self.persistence.load_workflows()
+                fresh_states = self.persistence.load_workflow_states()
+                
+                # Update in-memory cache with any new/updated entries
+                updated_count = 0
+                for wf_id, wf_data in fresh_workflows.items():
+                    if wf_id not in self.workflows:
+                        self.workflows[wf_id] = wf_data
+                        updated_count += 1
+                    elif self.workflows[wf_id] != wf_data:
+                        self.workflows[wf_id] = wf_data
+                        updated_count += 1
+                
+                # Update state history
+                for wf_id, states in fresh_states.items():
+                    if wf_id not in self.state_history:
+                        self.state_history[wf_id] = states
+                        updated_count += 1
+                    elif self.state_history[wf_id] != states:
+                        self.state_history[wf_id] = states
+                        updated_count += 1
+                
+                if updated_count > 0:
+                    print(f"[WorkflowState] Synced {updated_count} updates from database")
+                    
+            except Exception as e:
+                print(f"[WorkflowState] Warning: Could not sync with database: {e}")
+    
     def create_workflow(self, workflow_id: str, agent_id: str, module_name: str, 
                        request: Dict[str, Any]) -> None:
         """Initialize a new workflow with RUNNING state"""
@@ -178,6 +211,29 @@ class AgentCache:
             except Exception as e:
                 print(f"[AgentCache] Warning: Could not load persistent agents: {e}")
     
+    def sync_with_database(self):
+        """Sync in-memory cache with database"""
+        if self.persistence:
+            try:
+                # Load fresh data from database
+                fresh_agents = self.persistence.load_agents()
+                
+                # Update in-memory cache with any new/updated entries
+                updated_count = 0
+                for agent_id, agent in fresh_agents.items():
+                    if agent_id not in self.agents:
+                        self.agents[agent_id] = agent
+                        updated_count += 1
+                    elif self.agents[agent_id] != agent:
+                        self.agents[agent_id] = agent
+                        updated_count += 1
+                
+                if updated_count > 0:
+                    print(f"[AgentCache] Synced {updated_count} agent updates from database")
+                    
+            except Exception as e:
+                print(f"[AgentCache] Warning: Could not sync with database: {e}")
+    
     def update_heartbeat(self, agent_id: str, hostname: str, config: Dict[str, Any]) -> AgentInfo:
         """Update or create agent from heartbeat"""
         now = datetime.now(timezone.utc)
@@ -215,7 +271,13 @@ class AgentCache:
         """Mark agents as dead if they haven't sent heartbeat"""
         now = datetime.now(timezone.utc)
         for agent_id, agent in self.agents.items():
-            if agent.alive and (now - agent.last_seen) > timedelta(seconds=timeout_seconds):
+            # Ensure last_seen is timezone-aware for comparison
+            last_seen = agent.last_seen
+            if last_seen.tzinfo is None:
+                # If naive datetime, assume it's UTC
+                last_seen = last_seen.replace(tzinfo=timezone.utc)
+            
+            if agent.alive and (now - last_seen) > timedelta(seconds=timeout_seconds):
                 agent.alive = False
                 print(f"[AgentCache] Marked dead: {agent_id}")
     
@@ -543,6 +605,173 @@ async def workflow_cleanup_task():
         except Exception as e:
             print(f"[WorkflowCleanup] Error: {e}")
 
+async def cache_sync_task():
+    """Periodically synchronize in-memory cache with database"""
+    while True:
+        # Sync every 30 seconds
+        await asyncio.sleep(30)
+        try:
+            # Only proceed if we have persistence managers
+            if not agent_cache.persistence or not workflow_state.persistence:
+                await asyncio.sleep(30)
+                continue
+                
+            # Synchronize agents
+            db_agents = agent_cache.persistence.load_agents()
+            
+            # Update in-memory cache with any new/changed records from database
+            for agent_id, db_agent in db_agents.items():
+                # If agent doesn't exist in memory or database record is newer
+                if agent_id not in agent_cache.agents:
+                    agent_cache.agents[agent_id] = db_agent
+                    print(f"[CacheSync] Added agent {agent_id} from database")
+                else:
+                    # Conflict resolution: use the more recent record
+                    mem_agent = agent_cache.agents[agent_id]
+                    # Compare timestamps to determine which is more recent
+                    # Ensure both timestamps have the same timezone awareness
+                    db_last_seen = db_agent.last_seen
+                    mem_last_seen = mem_agent.last_seen
+                    
+                    # Convert naive datetime to timezone-aware if needed
+                    if db_last_seen.tzinfo is None and mem_last_seen.tzinfo is not None:
+                        # Database timestamp is naive, memory timestamp is timezone-aware
+                        db_last_seen = db_last_seen.replace(tzinfo=timezone.utc)
+                    elif db_last_seen.tzinfo is not None and mem_last_seen.tzinfo is None:
+                        # Memory timestamp is naive, database timestamp is timezone-aware
+                        mem_last_seen = mem_last_seen.replace(tzinfo=timezone.utc)
+                    
+                    if db_last_seen > mem_last_seen:
+                        # Database record is newer, update memory
+                        agent_cache.agents[agent_id] = db_agent
+                        print(f"[CacheSync] Updated agent {agent_id} from database (newer timestamp)")
+                    elif db_agent.total_heartbeats > mem_agent.total_heartbeats:
+                        # Database has more heartbeats, likely more accurate
+                        agent_cache.agents[agent_id] = db_agent
+                        print(f"[CacheSync] Updated agent {agent_id} from database (more heartbeats)")
+            
+            # Remove agents from memory that no longer exist in database
+            mem_agent_ids = set(agent_cache.agents.keys())
+            db_agent_ids = set(db_agents.keys())
+            removed_agents = mem_agent_ids - db_agent_ids
+            
+            for agent_id in removed_agents:
+                # Only remove if it's not a recently active agent
+                agent = agent_cache.agents[agent_id]
+                # Ensure agent.last_seen has timezone info for comparison
+                agent_last_seen = agent.last_seen
+                if agent_last_seen.tzinfo is None:
+                    agent_last_seen = agent_last_seen.replace(tzinfo=timezone.utc)
+                
+                if not agent.alive or (datetime.now(timezone.utc) - agent_last_seen).total_seconds() > 300:  # 5 minutes
+                    del agent_cache.agents[agent_id]
+                    print(f"[CacheSync] Removed agent {agent_id} (no longer in database)")
+            
+            # Synchronize workflows
+            db_workflows = workflow_state.persistence.load_workflows()
+            db_workflow_states = workflow_state.persistence.load_workflow_states()
+            
+            # Update in-memory workflows with any new/changed records from database
+            for workflow_id, db_workflow in db_workflows.items():
+                # If workflow doesn't exist in memory
+                if workflow_id not in workflow_state.workflows:
+                    workflow_state.workflows[workflow_id] = db_workflow
+                    print(f"[CacheSync] Added workflow {workflow_id} from database")
+                else:
+                    # Conflict resolution: use the more recent record
+                    mem_workflow = workflow_state.workflows[workflow_id]
+                    # Compare creation timestamps to determine which is more recent
+                    try:
+                        mem_created_raw = mem_workflow.get("created_at")
+                        db_created_raw = db_workflow.get("created_at")
+                        
+                        if mem_created_raw and db_created_raw:
+                            # Convert to datetime objects if they're strings
+                            if isinstance(mem_created_raw, str):
+                                mem_created = datetime.fromisoformat(mem_created_raw)
+                            elif isinstance(mem_created_raw, datetime):
+                                mem_created = mem_created_raw
+                            else:
+                                print(f"[CacheSync] Warning: Unexpected type for mem_created: {type(mem_created_raw)}")
+                                continue
+                            
+                            if isinstance(db_created_raw, str):
+                                db_created = datetime.fromisoformat(db_created_raw)
+                            elif isinstance(db_created_raw, datetime):
+                                db_created = db_created_raw
+                            else:
+                                print(f"[CacheSync] Warning: Unexpected type for db_created: {type(db_created_raw)}")
+                                continue
+                            
+                            # Ensure both timestamps have the same timezone awareness
+                            if db_created.tzinfo is None and mem_created.tzinfo is not None:
+                                # Database timestamp is naive, memory timestamp is timezone-aware
+                                db_created = db_created.replace(tzinfo=timezone.utc)
+                            elif db_created.tzinfo is not None and mem_created.tzinfo is None:
+                                # Memory timestamp is naive, database timestamp is timezone-aware
+                                mem_created = mem_created.replace(tzinfo=timezone.utc)
+                            
+                            if db_created > mem_created:
+                                # Database record is newer, update memory
+                                workflow_state.workflows[workflow_id] = db_workflow
+                                print(f"[CacheSync] Updated workflow {workflow_id} from database (newer timestamp)")
+                    except (ValueError, TypeError) as e:
+                        # If parsing fails, skip this comparison
+                        print(f"[CacheSync] Warning: Could not compare timestamps for workflow {workflow_id}: {e}")
+            
+            # Update in-memory workflow states with any new/changed records from database
+            for workflow_id, db_states in db_workflow_states.items():
+                # If workflow states don't exist in memory or database has more states
+                if workflow_id not in workflow_state.state_history:
+                    workflow_state.state_history[workflow_id] = db_states
+                    print(f"[CacheSync] Added workflow states for {workflow_id} from database")
+                else:
+                    # Merge states, keeping the most complete history
+                    mem_states = workflow_state.state_history[workflow_id]
+                    # If database has more recent states, update
+                    try:
+                        if db_states and mem_states:
+                            # Get last timestamps from both sources
+                            db_last_ts_raw = db_states[-1]["timestamp"]
+                            mem_last_ts_raw = mem_states[-1]["timestamp"]
+                            
+                            # Convert to datetime objects if they're strings
+                            if isinstance(db_last_ts_raw, str):
+                                db_last_timestamp = datetime.fromisoformat(db_last_ts_raw)
+                            elif isinstance(db_last_ts_raw, datetime):
+                                db_last_timestamp = db_last_ts_raw
+                            else:
+                                print(f"[CacheSync] Warning: Unexpected type for db timestamp: {type(db_last_ts_raw)}")
+                                continue
+                            
+                            if isinstance(mem_last_ts_raw, str):
+                                mem_last_timestamp = datetime.fromisoformat(mem_last_ts_raw)
+                            elif isinstance(mem_last_ts_raw, datetime):
+                                mem_last_timestamp = mem_last_ts_raw
+                            else:
+                                print(f"[CacheSync] Warning: Unexpected type for mem timestamp: {type(mem_last_ts_raw)}")
+                                continue
+                            
+                            # Ensure both timestamps have the same timezone awareness
+                            if db_last_timestamp.tzinfo is None and mem_last_timestamp.tzinfo is not None:
+                                # Database timestamp is naive, memory timestamp is timezone-aware
+                                db_last_timestamp = db_last_timestamp.replace(tzinfo=timezone.utc)
+                            elif db_last_timestamp.tzinfo is not None and mem_last_timestamp.tzinfo is None:
+                                # Memory timestamp is naive, database timestamp is timezone-aware
+                                mem_last_timestamp = mem_last_timestamp.replace(tzinfo=timezone.utc)
+                            
+                            if db_last_timestamp > mem_last_timestamp:
+                                workflow_state.state_history[workflow_id] = db_states
+                                print(f"[CacheSync] Updated workflow states for {workflow_id} from database")
+                    except (ValueError, TypeError, KeyError) as e:
+                        # If parsing fails, skip this comparison
+                        print(f"[CacheSync] Warning: Could not compare state timestamps for workflow {workflow_id}: {e}")
+            
+            print(f"[CacheSync] Completed sync - Agents: {len(agent_cache.agents)}, Workflows: {len(workflow_state.workflows)}")
+
+        except Exception as e:
+            print(f"[CacheSync] Error during synchronization: {e}")
+
 # ============================================================================
 # FASTAPI APPLICATION
 # ============================================================================
@@ -564,6 +793,7 @@ async def startup_event():
     asyncio.create_task(nats_connect_task())
     asyncio.create_task(agent_cleanup_task())
     asyncio.create_task(workflow_cleanup_task())
+    asyncio.create_task(cache_sync_task())
 
 # ============================================================================
 # API ROUTES - HEALTH & AGENTS
