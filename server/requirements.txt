@@ -9,7 +9,10 @@ pydantic
 pydantic-settings
 openapi-schema-validator
 nats-observe @ git+https://github.com/arnavdas88/nats-observatory
-opentelemetry-api
-opentelemetry-sdk
-opentelemetry-exporter-otlp
+opentelemetry-api==1.38.0
+opentelemetry-sdk==1.38.0
+opentelemetry-exporter-otlp==1.38.0
+opentelemetry-exporter-otlp-proto-http==1.38.0
+opentelemetry-exporter-zipkin-json==1.38.0
+opentelemetry-instrumentation-requests==0.59b0
 psycopg2-binary

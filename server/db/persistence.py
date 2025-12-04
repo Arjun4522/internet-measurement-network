@@ -32,7 +32,7 @@ except ImportError:
 class PersistenceManager:
     """Manages persistence of agent and workflow state data"""
     
-    def __init__(self, db_url: str = None):
+    def __init__(self, db_url: str = ""):
         self.db_url = db_url or os.environ.get("DBOS_SYSTEM_DATABASE_URL", "postgresql://imn_user:imn_password@postgres:5432/imn_db")
         self.init_tables()
     
@@ -197,7 +197,7 @@ class PersistenceManager:
         conn.commit()
         conn.close()
     
-    def save_workflow_state(self, workflow_id: str, state: str, timestamp: str, metadata: Dict[str, Any] = None):
+    def save_workflow_state(self, workflow_id: str, state: str, timestamp: str, metadata: Optional[Dict[str, Any]] = None):
         """Save workflow state transition to database"""
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -272,10 +272,10 @@ class PersistenceManager:
         cursor = conn.cursor()
         
         # Delete states first (foreign key constraint)
-        cursor.execute('DELETE FROM persistent_workflow_states WHERE workflow_id = ?', (workflow_id,))
+        cursor.execute('DELETE FROM persistent_workflow_states WHERE workflow_id = %s', (workflow_id,))
         
         # Delete workflow
-        cursor.execute('DELETE FROM persistent_workflows WHERE workflow_id = ?', (workflow_id,))
+        cursor.execute('DELETE FROM persistent_workflows WHERE workflow_id = %s', (workflow_id,))
         
         conn.commit()
         conn.close()
