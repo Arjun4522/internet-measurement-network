@@ -24,6 +24,25 @@ services:
     networks:
       - aiori-net
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    ports:
+      - "8123:8123"  # HTTP interface
+      - "9000:9000"  # Native interface
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    environment:
+      - CLICKHOUSE_DB=imn
+      - CLICKHOUSE_USER=admin
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    networks:
+      - aiori-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "localhost:8123/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   server1:
     build:
       context: .
@@ -34,11 +53,17 @@ services:
     depends_on:
       - nats
       - postgres
+      - clickhouse
     networks:
       - aiori-net
     environment:
       - NATS_URL=nats://nats-server:4222
       - DBOS_SYSTEM_DATABASE_URL=postgresql://imn_user:imn_password@postgres:5432/imn_db
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_DATABASE=imn
+      - CLICKHOUSE_USERNAME=admin
+      - CLICKHOUSE_PASSWORD=
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
       interval: 30s
@@ -55,11 +80,17 @@ services:
     depends_on:
       - nats
       - postgres
+      - clickhouse
     networks:
       - aiori-net
     environment:
       - NATS_URL=nats://nats-server:4222
       - DBOS_SYSTEM_DATABASE_URL=postgresql://imn_user:imn_password@postgres:5432/imn_db
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_DATABASE=imn
+      - CLICKHOUSE_USERNAME=admin
+      - CLICKHOUSE_PASSWORD=
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
       interval: 30s
@@ -104,6 +135,7 @@ services:
 
 volumes:
   postgres_data:
+  clickhouse_data:
 
 networks:
   aiori-net:

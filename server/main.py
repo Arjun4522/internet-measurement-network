@@ -13,6 +13,14 @@ from nats.aio.msg import Msg
 from openapi_schema_validator import validate
 from jsonschema.exceptions import ValidationError
 
+# Try to import ClickHouse manager
+try:
+    from olap.clickhouse_manager import ClickHouseManager
+    CLICKHOUSE_AVAILABLE = True
+except ImportError:
+    CLICKHOUSE_AVAILABLE = False
+    print("[Server] ClickHouse manager not available")
+
 from models import AgentInfo, ModuleStateEnum
 from db.persistence import PersistenceManager
 
@@ -34,6 +42,13 @@ class Config:
     
     # Database
     DBOS_SYSTEM_DATABASE_URL = os.environ.get("DBOS_SYSTEM_DATABASE_URL", "sqlite:///db/data.db")
+    
+    # ClickHouse configuration
+    CLICKHOUSE_HOST = os.environ.get("CLICKHOUSE_HOST", "localhost")
+    CLICKHOUSE_PORT = int(os.environ.get("CLICKHOUSE_PORT", 8123))
+    CLICKHOUSE_DATABASE = os.environ.get("CLICKHOUSE_DATABASE", "imn")
+    CLICKHOUSE_USERNAME = os.environ.get("CLICKHOUSE_USERNAME", "admin")
+    CLICKHOUSE_PASSWORD = os.environ.get("CLICKHOUSE_PASSWORD", "")
 
 config = Config()
 
@@ -297,6 +312,22 @@ class AgentCache:
 workflow_state = WorkflowState()
 agent_cache = AgentCache()
 
+# ClickHouse manager
+clickhouse_manager = None
+if CLICKHOUSE_AVAILABLE:
+    clickhouse_manager = ClickHouseManager(
+        host=config.CLICKHOUSE_HOST,
+        port=config.CLICKHOUSE_PORT,
+        database=config.CLICKHOUSE_DATABASE,
+        username=config.CLICKHOUSE_USERNAME,
+        password=config.CLICKHOUSE_PASSWORD
+    )
+    if clickhouse_manager.connect():
+        clickhouse_manager.initialize_tables()
+    else:
+        print("[Server] Failed to connect to ClickHouse")
+        clickhouse_manager = None
+
 # ============================================================================
 # DBOS INITIALIZATION
 # ============================================================================
@@ -471,6 +502,65 @@ async def setup_agent_subscriptions_workflow(
             final_state = "COMPLETED" if success else "FAILED"
             workflow_state.set_state(workflow_id, final_state, result_received=True)
             
+            # Push measurement data to ClickHouse if available
+            if CLICKHOUSE_AVAILABLE and clickhouse_manager:
+                try:
+                    # Get workflow information
+                    workflow_data = workflow_state.workflows.get(workflow_id, {})
+                    agent_id = workflow_data.get("agent_id", "")
+                    
+                    # Get agent information
+                    agent_info = agent_cache.get(agent_id)
+                    
+                    # Prepare measurement data for ClickHouse
+                    clickhouse_data = {
+                        "workflow_id": workflow_id,
+                        "agent_id": agent_id,
+                        "module_name": workflow_data.get("module_name", ""),
+                        "created_at": datetime.fromisoformat(workflow_data.get("created_at", datetime.now(timezone.utc).isoformat())),
+                        "completed_at": datetime.now(timezone.utc),
+                        "measurement_data": data,
+                        "success": success,
+                        "request_data": workflow_data.get("request", {})
+                    }
+                    
+                    # Add agent metadata if available
+                    if agent_info:
+                        clickhouse_data["agent_hostname"] = agent_info.hostname
+                        clickhouse_data["agent_name"] = agent_info.config.get("agent", {}).get("name", "")
+                        
+                        # Add more agent metadata from heartbeat data if available
+                        agent_config = agent_info.config
+                        if "agent" in agent_config:
+                            agent_data = agent_config["agent"]
+                            if "user" in agent_data:
+                                user_data = agent_data["user"]
+                                clickhouse_data["user_name"] = user_data.get("user", "")
+                                clickhouse_data["user_uid"] = user_data.get("uid", 0)
+                                clickhouse_data["user_gid"] = user_data.get("gid", 0)
+                                clickhouse_data["user_home_dir"] = user_data.get("home_dir", "")
+                                clickhouse_data["user_shell"] = user_data.get("shell", "")
+                            
+                            if "system" in agent_data:
+                                system_data = agent_data["system"]
+                                clickhouse_data["system_machine"] = system_data.get("machine", "")
+                                clickhouse_data["system_node_name"] = system_data.get("node_name", "")
+                                clickhouse_data["system_platform"] = system_data.get("platform", "")
+                                clickhouse_data["system_processor"] = system_data.get("processor", "")
+                                clickhouse_data["system_release"] = system_data.get("release", "")
+                                clickhouse_data["system_version"] = system_data.get("version", "")
+                            
+                            if "network" in agent_data:
+                                clickhouse_data["network_interfaces"] = agent_data["network"]
+                            
+                            if "pid" in agent_data:
+                                clickhouse_data["agent_pid"] = agent_data["pid"]
+                    
+                    # Insert into ClickHouse
+                    clickhouse_manager.insert_measurement(clickhouse_data)
+                except Exception as e:
+                    print(f"[ClickHouse] Error inserting measurement data: {e}")
+            
         except Exception as e:
             print(f"[Result] Error processing result: {e}")
     
@@ -497,6 +587,34 @@ async def handle_heartbeat(msg: Msg) -> None:
             previous_config = agent_cache.agents[agent_id].config
         
         agent = agent_cache.update_heartbeat(agent_id, hostname, data)
+        
+        # Push heartbeat data to ClickHouse if available
+        if CLICKHOUSE_AVAILABLE and clickhouse_manager:
+            try:
+                # Prepare heartbeat data for ClickHouse
+                clickhouse_data = {
+                    "agent_id": agent_id,
+                    "agent_name": data["agent"].get("name", ""),
+                    "hostname": hostname,
+                    "timestamp": datetime.now(timezone.utc),
+                    "alive": True,
+                    "total_heartbeats": agent.total_heartbeats if agent else 0,
+                    "config": data,
+                }
+                
+                # Add system metrics if available
+                if "agent" in data and "user" in data["agent"]:
+                    user_data = data["agent"]["user"]
+                    if "loadavg" in user_data:
+                        loadavg = user_data["loadavg"]
+                        clickhouse_data["load_avg_1m"] = loadavg.get("1m", 0.0)
+                        clickhouse_data["load_avg_5m"] = loadavg.get("5m", 0.0)
+                        clickhouse_data["load_avg_15m"] = loadavg.get("15m", 0.0)
+                
+                # Insert into ClickHouse
+                clickhouse_manager.insert_heartbeat(clickhouse_data)
+            except Exception as e:
+                print(f"[ClickHouse] Error inserting heartbeat data: {e}")
         
         # If config changed or new agent, resubscribe
         if previous_config != data:
@@ -555,6 +673,28 @@ async def handle_module_state(msg: Msg) -> None:
             error_message=data.get("error_message")
         )
         
+        # Push module state data to ClickHouse if available
+        if CLICKHOUSE_AVAILABLE and clickhouse_manager:
+            try:
+                # Prepare state data for ClickHouse
+                clickhouse_data = {
+                    "workflow_id": workflow_id,
+                    "agent_id": agent_id,
+                    "module_name": module_name,
+                    "state": mapped_state,
+                    "timestamp": datetime.now(timezone.utc),
+                    "error_message": data.get("error_message"),
+                    "details": {
+                        "agent_state": state,
+                        "original_data": data
+                    }
+                }
+                
+                # Insert into ClickHouse
+                clickhouse_manager.insert_module_state(clickhouse_data)
+            except Exception as e:
+                print(f"[ClickHouse] Error inserting module state data: {e}")
+        
     except Exception as e:
         print(f"[ModuleState] Error processing state: {e}")
 
@@ -609,7 +749,7 @@ async def cache_sync_task():
     """Periodically synchronize in-memory cache with database"""
     while True:
         # Sync every 30 seconds
-        await asyncio.sleep(30)
+        await asyncio.sleep(3)
         try:
             # Only proceed if we have persistence managers
             if not agent_cache.persistence or not workflow_state.persistence:
