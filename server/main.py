@@ -314,19 +314,80 @@ agent_cache = AgentCache()
 
 # ClickHouse manager
 clickhouse_manager = None
-if CLICKHOUSE_AVAILABLE:
-    clickhouse_manager = ClickHouseManager(
-        host=config.CLICKHOUSE_HOST,
-        port=config.CLICKHOUSE_PORT,
-        database=config.CLICKHOUSE_DATABASE,
-        username=config.CLICKHOUSE_USERNAME,
-        password=config.CLICKHOUSE_PASSWORD
-    )
-    if clickhouse_manager.connect():
-        clickhouse_manager.initialize_tables()
-    else:
-        print("[Server] Failed to connect to ClickHouse")
-        clickhouse_manager = None
+
+def initialize_clickhouse():
+    """Initialize ClickHouse connection and tables with proper error handling"""
+    global clickhouse_manager
+    
+    if not CLICKHOUSE_AVAILABLE:
+        print("[Server] ClickHouse support not available (clickhouse-connect not installed)")
+        return False
+    
+    try:
+        print("[Server] Initializing ClickHouse connection...")
+        clickhouse_manager = ClickHouseManager(
+            host=config.CLICKHOUSE_HOST,
+            port=config.CLICKHOUSE_PORT,
+            database=config.CLICKHOUSE_DATABASE,
+            username=config.CLICKHOUSE_USERNAME,
+            password=config.CLICKHOUSE_PASSWORD
+        )
+        
+        # Try to connect
+        if not clickhouse_manager.connect():
+            print("[Server] Failed to connect to ClickHouse - analytics will be disabled")
+            clickhouse_manager = None
+            return False
+        
+        print("[Server] ClickHouse connected, initializing tables...")
+        
+        # Try to initialize tables
+        if not clickhouse_manager.initialize_tables():
+            print("[Server] Failed to initialize ClickHouse tables - analytics will be disabled")
+            clickhouse_manager.close()
+            clickhouse_manager = None
+            return False
+        
+        print("[Server] ✓ ClickHouse initialized successfully")
+        return True
+        
+    except Exception as e:
+        print(f"[Server] ClickHouse initialization error: {e}")
+        if clickhouse_manager:
+            try:
+                clickhouse_manager.close()
+            except:
+                pass
+            clickhouse_manager = None
+        return False
+
+# Don't initialize on module load - will be initialized during startup event
+# initialize_clickhouse()
+
+# ============================================================================
+# HELPER FUNCTION FOR SAFE CLICKHOUSE OPERATIONS
+# ============================================================================
+
+def safe_clickhouse_insert(operation_name: str, insert_func, data: Dict[str, Any]) -> bool:
+    """
+    Safely attempt to insert data into ClickHouse with error handling
+    
+    Args:
+        operation_name: Name of the operation for logging
+        insert_func: The ClickHouse insert function to call
+        data: Data dictionary to insert
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    if not CLICKHOUSE_AVAILABLE or not clickhouse_manager:
+        return False
+    
+    try:
+        return insert_func(data)
+    except Exception as e:
+        print(f"[ClickHouse] {operation_name} failed: {e}")
+        return False
 
 # ============================================================================
 # DBOS INITIALIZATION
@@ -513,11 +574,18 @@ async def setup_agent_subscriptions_workflow(
                     agent_info = agent_cache.get(agent_id)
                     
                     # Prepare measurement data for ClickHouse
+                    try:
+                        created_at_str = workflow_data.get("created_at")
+                        created_at = datetime.fromisoformat(created_at_str) if created_at_str else datetime.now(timezone.utc)
+                    except (ValueError, TypeError):
+                        created_at = datetime.now(timezone.utc)
+                        print(f"[ClickHouse] Warning: Invalid created_at format for workflow {workflow_id}, using current time")
+                    
                     clickhouse_data = {
                         "workflow_id": workflow_id,
                         "agent_id": agent_id,
                         "module_name": workflow_data.get("module_name", ""),
-                        "created_at": datetime.fromisoformat(workflow_data.get("created_at", datetime.now(timezone.utc).isoformat())),
+                        "created_at": created_at,
                         "completed_at": datetime.now(timezone.utc),
                         "measurement_data": data,
                         "success": success,
@@ -556,8 +624,8 @@ async def setup_agent_subscriptions_workflow(
                             if "pid" in agent_data:
                                 clickhouse_data["agent_pid"] = agent_data["pid"]
                     
-                    # Insert into ClickHouse
-                    clickhouse_manager.insert_measurement(clickhouse_data)
+                    # Insert into ClickHouse using safe wrapper
+                    safe_clickhouse_insert("measurement insertion", clickhouse_manager.insert_measurement, clickhouse_data)
                 except Exception as e:
                     print(f"[ClickHouse] Error inserting measurement data: {e}")
             
@@ -600,6 +668,10 @@ async def handle_heartbeat(msg: Msg) -> None:
                     "alive": True,
                     "total_heartbeats": agent.total_heartbeats if agent else 0,
                     "config": data,
+                    # Default load average values
+                    "load_avg_1m": 0.0,
+                    "load_avg_5m": 0.0,
+                    "load_avg_15m": 0.0,
                 }
                 
                 # Add system metrics if available
@@ -607,12 +679,26 @@ async def handle_heartbeat(msg: Msg) -> None:
                     user_data = data["agent"]["user"]
                     if "loadavg" in user_data:
                         loadavg = user_data["loadavg"]
-                        clickhouse_data["load_avg_1m"] = loadavg.get("1m", 0.0)
-                        clickhouse_data["load_avg_5m"] = loadavg.get("5m", 0.0)
-                        clickhouse_data["load_avg_15m"] = loadavg.get("15m", 0.0)
+                        # Handle different loadavg data structures safely
+                        try:
+                            # loadavg is likely a list/tuple [1m, 5m, 15m] or dict
+                            if isinstance(loadavg, (list, tuple)) and len(loadavg) >= 3:
+                                clickhouse_data["load_avg_1m"] = float(loadavg[0])
+                                clickhouse_data["load_avg_5m"] = float(loadavg[1])
+                                clickhouse_data["load_avg_15m"] = float(loadavg[2])
+                            elif isinstance(loadavg, dict):
+                                clickhouse_data["load_avg_1m"] = float(loadavg.get("1m", 0.0))
+                                clickhouse_data["load_avg_5m"] = float(loadavg.get("5m", 0.0))
+                                clickhouse_data["load_avg_15m"] = float(loadavg.get("15m", 0.0))
+                        except (TypeError, ValueError, IndexError, KeyError) as e:
+                            # If there's any issue with loadavg data, use defaults
+                            print(f"[Heartbeat] Warning: Could not parse loadavg data: {e}")
+                            clickhouse_data["load_avg_1m"] = 0.0
+                            clickhouse_data["load_avg_5m"] = 0.0
+                            clickhouse_data["load_avg_15m"] = 0.0
                 
-                # Insert into ClickHouse
-                clickhouse_manager.insert_heartbeat(clickhouse_data)
+                # Insert into ClickHouse using safe wrapper
+                safe_clickhouse_insert("heartbeat insertion", clickhouse_manager.insert_heartbeat, clickhouse_data)
             except Exception as e:
                 print(f"[ClickHouse] Error inserting heartbeat data: {e}")
         
@@ -690,8 +776,8 @@ async def handle_module_state(msg: Msg) -> None:
                     }
                 }
                 
-                # Insert into ClickHouse
-                clickhouse_manager.insert_module_state(clickhouse_data)
+                # Insert into ClickHouse using safe wrapper
+                safe_clickhouse_insert("module state insertion", clickhouse_manager.insert_module_state, clickhouse_data)
             except Exception as e:
                 print(f"[ClickHouse] Error inserting module state data: {e}")
         
@@ -930,6 +1016,16 @@ async def startup_event():
     """Initialize DBOS and background tasks"""
     DBOS.launch()
     print("[DBOS] Launched")
+    
+    # Initialize ClickHouse connection with retry logic
+    for attempt in range(5):
+        if initialize_clickhouse():
+            break
+        print(f"[Server] ClickHouse initialization failed, retrying in 5 seconds... (attempt {attempt + 1}/5)")
+        await asyncio.sleep(5)
+    else:
+        print("[Server] ClickHouse initialization failed after 5 attempts - analytics will be disabled")
+    
     asyncio.create_task(nats_connect_task())
     asyncio.create_task(agent_cleanup_task())
     asyncio.create_task(workflow_cleanup_task())
@@ -1173,3 +1269,36 @@ async def debug_state():
             }
         }
     }
+
+
+@app.get("/debug/clickhouse")
+async def debug_clickhouse():
+    """Debug ClickHouse connection status"""
+    try:
+        if not CLICKHOUSE_AVAILABLE:
+            return {
+                "status": "library_not_available",
+                "available": False,
+                "message": "clickhouse-connect library not installed"
+            }
+        
+        if not clickhouse_manager:
+            return {
+                "status": "not_initialized",
+                "available": CLICKHOUSE_AVAILABLE,
+                "manager_exists": False
+            }
+        
+        # Get status from manager
+        status = clickhouse_manager.get_status()
+        
+        return {
+            "status": "initialized",
+            **status
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e),
+            "error_type": type(e).__name__
+        }

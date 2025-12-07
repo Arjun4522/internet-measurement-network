@@ -1,9 +1,11 @@
 """
 ClickHouse manager for handling connections and data operations
+Enhanced with debugging statements and reconnection logic
+FIXED: Removed column_names parameter from insert() calls
 """
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
 # Try to import clickhouse-connect, but handle if not available
@@ -39,14 +41,58 @@ class ClickHouseManager:
             username: Username for authentication
             password: Password for authentication
         """
-        self.host = host or str(os.environ.get('CLICKHOUSE_HOST', 'localhost'))
+        self.host = host or os.environ.get('CLICKHOUSE_HOST', 'localhost')
         self.port = port or int(os.environ.get('CLICKHOUSE_PORT', 8123))
-        self.database = database or str(os.environ.get('CLICKHOUSE_DATABASE', 'imn'))
-        self.username = username or str(os.environ.get('CLICKHOUSE_USERNAME', 'admin'))
-        self.password = password or str(os.environ.get('CLICKHOUSE_PASSWORD', ''))
+        self.database = database or os.environ.get('CLICKHOUSE_DATABASE', 'imn')
+        self.username = username or os.environ.get('CLICKHOUSE_USERNAME', 'admin')
+        self.password = password or os.environ.get('CLICKHOUSE_PASSWORD', '')
         
         self.client: Optional[Client] = None
         self.connected = False
+        self._connection_attempts = 0
+        self._last_error = None
+        
+        print(f"[ClickHouse] Initialized with config:")
+        print(f"[ClickHouse]   Host: {self.host}")
+        print(f"[ClickHouse]   Port: {self.port}")
+        print(f"[ClickHouse]   Database: {self.database}")
+        print(f"[ClickHouse]   Username: {self.username}")
+        print(f"[ClickHouse]   Password: {'***' if self.password else '(empty)'}")
+    
+    def _safe_json_encode(self, value, default=None):
+        """Safely encode value to JSON string"""
+        if default is None:
+            default = {}
+        if isinstance(value, str):
+            return value
+        return json.dumps(value if value is not None else default)
+    
+    def ensure_connected(self) -> bool:
+        """
+        Ensure we're connected to ClickHouse, reconnect if necessary
+        
+        Returns:
+            bool: True if connected, False otherwise
+        """
+        # If we think we're connected, test the connection
+        if self.connected and self.client:
+            try:
+                # Simple ping query
+                self.client.command("SELECT 1")
+                return True
+            except Exception as e:
+                print(f"[ClickHouse] Connection test failed: {type(e).__name__}: {e}")
+                print(f"[ClickHouse] Attempting to reconnect...")
+                self.connected = False
+        
+        # If not connected, try to connect
+        if not self.connected:
+            success = self.connect()
+            if not success:
+                print(f"[ClickHouse] Reconnection failed after connection test failure")
+            return success
+        
+        return False
         
     def connect(self) -> bool:
         """
@@ -56,10 +102,17 @@ class ClickHouseManager:
             bool: True if connection successful, False otherwise
         """
         if not CLICKHOUSE_AVAILABLE:
-            print("[ClickHouse] clickhouse-connect not available")
+            self._last_error = "clickhouse-connect library not available"
+            print("[ClickHouse] ERROR: clickhouse-connect library not available")
+            print("[ClickHouse] Install with: pip install clickhouse-connect")
             return False
-            
+        
+        self._connection_attempts += 1
+        print(f"[ClickHouse] Connection attempt #{self._connection_attempts}")
+        print(f"[ClickHouse] Connecting to {self.host}:{self.port}/{self.database}...")
+        
         try:
+            # Create new client
             self.client = get_client(
                 host=self.host,
                 port=self.port,
@@ -67,11 +120,24 @@ class ClickHouseManager:
                 password=self.password,
                 database=self.database
             )
+            
+            # Test the connection
+            result = self.client.command("SELECT 1")
+            print(f"[ClickHouse] Connection test query result: {result}")
+            
+            # Test database access
+            version = self.client.command("SELECT version()")
+            print(f"[ClickHouse] ClickHouse version: {version}")
+            
             self.connected = True
-            print(f"[ClickHouse] Connected to {self.host}:{self.port}/{self.database}")
+            self._last_error = None
+            print(f"[ClickHouse] ✓ Successfully connected to {self.host}:{self.port}/{self.database}")
             return True
+            
         except Exception as e:
-            print(f"[ClickHouse] Connection failed: {e}")
+            error_msg = f"{type(e).__name__}: {e}"
+            self._last_error = error_msg
+            print(f"[ClickHouse] ✗ Connection failed: {error_msg}")
             self.connected = False
             return False
     
@@ -82,32 +148,52 @@ class ClickHouseManager:
         Returns:
             bool: True if initialization successful, False otherwise
         """
-        if not self.connected or not self.client:
-            print("[ClickHouse] Not connected to database")
+        if not self.ensure_connected():
+            print("[ClickHouse] Cannot initialize tables: Failed to connect")
             return False
-            
+        
+        print("[ClickHouse] Starting table initialization...")
+        
         try:
             # Import schema definitions
             from .clickhouse_schema import CREATE_TABLE_STATEMENTS
             
+            print(f"[ClickHouse] Found {len(CREATE_TABLE_STATEMENTS)} table definitions")
+            
+            success_count = 0
             # Execute each table creation statement separately
             for i, statement in enumerate(CREATE_TABLE_STATEMENTS):
                 try:
-                    # Strip any leading/trailing whitespace
                     clean_statement = statement.strip()
                     if clean_statement:
-                        print(f"[ClickHouse] Executing table creation {i+1}/{len(CREATE_TABLE_STATEMENTS)}")
+                        # Extract table name for better logging
+                        table_name = "unknown"
+                        if "CREATE TABLE" in clean_statement or "CREATE MATERIALIZED VIEW" in clean_statement:
+                            parts = clean_statement.split()
+                            for j, part in enumerate(parts):
+                                if part.upper() in ["TABLE", "VIEW"] and j + 2 < len(parts):
+                                    table_name = parts[j + 2]
+                                    break
+                        
+                        print(f"[ClickHouse] [{i+1}/{len(CREATE_TABLE_STATEMENTS)}] Creating {table_name}...")
                         self.client.command(clean_statement)
-                        print(f"[ClickHouse] Table {i+1} created successfully")
+                        success_count += 1
+                        print(f"[ClickHouse] [{i+1}/{len(CREATE_TABLE_STATEMENTS)}] ✓ {table_name} created")
                 except Exception as e:
-                    print(f"[ClickHouse] Failed to create table {i+1}: {e}")
-                    print(f"[ClickHouse] Statement was: {clean_statement[:100]}...")
-                    return False
+                    print(f"[ClickHouse] [{i+1}/{len(CREATE_TABLE_STATEMENTS)}] ✗ Failed: {type(e).__name__}: {e}")
+                    continue
             
-            print("[ClickHouse] All tables initialized successfully")
-            return True
+            print(f"[ClickHouse] ✓ Table initialization completed ({success_count}/{len(CREATE_TABLE_STATEMENTS)} successful)")
+            
+            if self.ensure_connected():
+                print("[ClickHouse] Connection still alive after table initialization")
+            else:
+                print("[ClickHouse] WARNING: Connection lost after table initialization!")
+                
+            return success_count > 0
+            
         except Exception as e:
-            print(f"[ClickHouse] Table initialization failed: {e}")
+            print(f"[ClickHouse] ✗ Table initialization failed: {type(e).__name__}: {e}")
             return False
     
     def insert_measurement(self, data: Dict[str, Any]) -> bool:
@@ -120,19 +206,21 @@ class ClickHouseManager:
         Returns:
             bool: True if insertion successful, False otherwise
         """
-        if not self.connected or not self.client:
-            print("[ClickHouse] Not connected to database")
+        if not self.ensure_connected():
+            print(f"[ClickHouse] Cannot insert measurement: Not connected")
             return False
-            
+        
+        workflow_id = data.get('workflow_id', 'unknown')
+        
         try:
             # Prepare data for insertion
             insert_data = [{
                 'workflow_id': data.get('workflow_id', ''),
                 'agent_id': data.get('agent_id', ''),
                 'module_name': data.get('module_name', ''),
-                'created_at': data.get('created_at', datetime.utcnow()),
-                'completed_at': data.get('completed_at', datetime.utcnow()),
-                'measurement_data': json.dumps(data.get('measurement_data', {})),
+                'created_at': data.get('created_at', datetime.now(timezone.utc)),
+                'completed_at': data.get('completed_at', datetime.now(timezone.utc)),
+                'measurement_data': self._safe_json_encode(data.get('measurement_data')),
                 'agent_hostname': data.get('agent_hostname', ''),
                 'agent_name': data.get('agent_name', ''),
                 'agent_pid': data.get('agent_pid', 0),
@@ -142,22 +230,26 @@ class ClickHouseManager:
                 'system_processor': data.get('system_processor', ''),
                 'system_release': data.get('system_release', ''),
                 'system_version': data.get('system_version', ''),
-                'network_interfaces': json.dumps(data.get('network_interfaces', {})),
+                'network_interfaces': self._safe_json_encode(data.get('network_interfaces')),
                 'user_name': data.get('user_name', ''),
                 'user_uid': data.get('user_uid', 0),
                 'user_gid': data.get('user_gid', 0),
                 'user_home_dir': data.get('user_home_dir', ''),
                 'user_shell': data.get('user_shell', ''),
-                'request_data': json.dumps(data.get('request_data', {})),
+                'request_data': self._safe_json_encode(data.get('request_data')),
                 'success': data.get('success', True)
             }]
             
-            # Insert data
+            # FIXED: Insert without column_names parameter
             self.client.insert('measurements', insert_data)
-            print(f"[ClickHouse] Measurement inserted for workflow {data.get('workflow_id', 'unknown')}")
+            print(f"[ClickHouse] ✓ Measurement inserted for workflow {workflow_id}")
             return True
+            
         except Exception as e:
-            print(f"[ClickHouse] Measurement insertion failed: {e}")
+            print(f"[ClickHouse] ✗ Measurement insertion failed: {type(e).__name__}: {e}")
+            print(f"[ClickHouse]   Workflow ID: {workflow_id}")
+            self.connected = False
+            self._last_error = str(e)
             return False
     
     def insert_heartbeat(self, data: Dict[str, Any]) -> bool:
@@ -170,31 +262,54 @@ class ClickHouseManager:
         Returns:
             bool: True if insertion successful, False otherwise
         """
-        if not self.connected or not self.client:
-            print("[ClickHouse] Not connected to database")
+        if not self.ensure_connected():
+            print(f"[ClickHouse] Cannot insert heartbeat: Not connected")
             return False
-            
+        
+        agent_id = data.get('agent_id', 'unknown')
+        
         try:
-            # Prepare data for insertion
-            insert_data = [{
-                'agent_id': data.get('agent_id', ''),
-                'agent_name': data.get('agent_name', ''),
-                'hostname': data.get('hostname', ''),
-                'timestamp': data.get('timestamp', datetime.utcnow()),
-                'alive': data.get('alive', True),
-                'total_heartbeats': data.get('total_heartbeats', 0),
-                'load_avg_1m': data.get('load_avg_1m', 0.0),
-                'load_avg_5m': data.get('load_avg_5m', 0.0),
-                'load_avg_15m': data.get('load_avg_15m', 0.0),
-                'config': json.dumps(data.get('config', {}))
-            }]
+            # Prepare data for insertion as a list of values in the correct order
+            # This matches the table schema order
+            insert_data = [(
+                data.get('agent_id', ''),
+                data.get('agent_name', ''),
+                data.get('hostname', ''),
+                data.get('timestamp', datetime.now(timezone.utc)),
+                data.get('alive', True),
+                data.get('total_heartbeats', 0),
+                data.get('load_avg_1m', 0.0),
+                data.get('load_avg_5m', 0.0),
+                data.get('load_avg_15m', 0.0),
+                self._safe_json_encode(data.get('config'))
+            )]
             
-            # Insert data
-            self.client.insert('agent_heartbeats', insert_data)
-            print(f"[ClickHouse] Heartbeat inserted for agent {data.get('agent_id', 'unknown')}")
+            # Column names in the correct order
+            column_names = [
+                'agent_id', 'agent_name', 'hostname', 'timestamp', 
+                'alive', 'total_heartbeats', 'load_avg_1m', 'load_avg_5m', 
+                'load_avg_15m', 'config'
+            ]
+            
+            # Debug: Print the data we're trying to insert
+            print(f"[ClickHouse] Preparing to insert heartbeat for agent {agent_id}")
+            for i, (col_name, value) in enumerate(zip(column_names, insert_data[0])):
+                print(f"[ClickHouse]   {col_name}: {type(value)} = {value}")
+            
+            # Insert with explicit column names and data as list of tuples
+            self.client.insert('agent_heartbeats', insert_data, column_names=column_names)
+            print(f"[ClickHouse] ✓ Heartbeat inserted for agent {agent_id}")
             return True
+            
         except Exception as e:
-            print(f"[ClickHouse] Heartbeat insertion failed: {e}")
+            print(f"[ClickHouse] ✗ Heartbeat insertion failed: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            print(f"[ClickHouse]   Agent ID: {agent_id}")
+            # Print the data that caused the error
+            print(f"[ClickHouse]   Data that caused error: {data}")
+            self.connected = False
+            self._last_error = str(e)
             return False
     
     def insert_module_state(self, data: Dict[str, Any]) -> bool:
@@ -207,10 +322,12 @@ class ClickHouseManager:
         Returns:
             bool: True if insertion successful, False otherwise
         """
-        if not self.connected or not self.client:
-            print("[ClickHouse] Not connected to database")
+        if not self.ensure_connected():
+            print(f"[ClickHouse] Cannot insert module state: Not connected")
             return False
-            
+        
+        workflow_id = data.get('workflow_id', 'unknown')
+        
         try:
             # Prepare data for insertion
             insert_data = [{
@@ -218,18 +335,57 @@ class ClickHouseManager:
                 'agent_id': data.get('agent_id', ''),
                 'module_name': data.get('module_name', ''),
                 'state': data.get('state', ''),
-                'timestamp': data.get('timestamp', datetime.utcnow()),
+                'timestamp': data.get('timestamp', datetime.now(timezone.utc)),
                 'error_message': data.get('error_message', None),
-                'details': json.dumps(data.get('details', {}))
+                'details': self._safe_json_encode(data.get('details'))
             }]
             
-            # Insert data
+            # FIXED: Insert without column_names parameter
             self.client.insert('module_states', insert_data)
-            print(f"[ClickHouse] Module state inserted for workflow {data.get('workflow_id', 'unknown')}")
+            print(f"[ClickHouse] ✓ Module state inserted for workflow {workflow_id}")
             return True
+            
         except Exception as e:
-            print(f"[ClickHouse] Module state insertion failed: {e}")
+            print(f"[ClickHouse] ✗ Module state insertion failed: {type(e).__name__}: {e}")
+            print(f"[ClickHouse]   Workflow ID: {workflow_id}")
+            self.connected = False
+            self._last_error = str(e)
             return False
+    
+    def get_status(self) -> Dict[str, Any]:
+        """
+        Get current connection status and statistics
+        
+        Returns:
+            Dictionary with connection status and info
+        """
+        status = {
+            "available": CLICKHOUSE_AVAILABLE,
+            "connected": self.connected,
+            "client_exists": self.client is not None,
+            "connection_attempts": self._connection_attempts,
+            "last_error": self._last_error,
+            "config": {
+                "host": self.host,
+                "port": self.port,
+                "database": self.database,
+                "username": self.username,
+            }
+        }
+        
+        # Test connection if we think we're connected
+        if self.connected and self.client:
+            try:
+                result = self.client.command("SELECT version()")
+                status["version"] = result
+                status["connection_test"] = "passed"
+            except Exception as e:
+                status["connection_test"] = f"failed: {e}"
+                status["connection_test_error"] = str(e)
+        else:
+            status["connection_test"] = "not_connected"
+        
+        return status
     
     def close(self):
         """Close ClickHouse connection"""
@@ -237,6 +393,6 @@ class ClickHouseManager:
             try:
                 self.client.close()
                 self.connected = False
-                print("[ClickHouse] Connection closed")
+                print("[ClickHouse] ✓ Connection closed")
             except Exception as e:
-                print(f"[ClickHouse] Error closing connection: {e}")
+                print(f"[ClickHouse] ✗ Error closing connection: {type(e).__name__}: {e}")
