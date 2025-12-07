@@ -1,10 +1,10 @@
 # Internet Measurement Network (IMN)
 
-A distributed system for performing network measurements using autonomous agents with real-time coordination and monitoring capabilities.
+A distributed system for performing network measurements using autonomous agents with real-time coordination, monitoring, and analytics capabilities.
 
 ## 🏗️ Architecture Overview
 
-The Internet Measurement Network is a microservices-based system that enables distributed network measurement tasks through autonomous agents. The architecture leverages NATS for messaging, OpenTelemetry for observability, and follows a modular design for extensibility.
+The Internet Measurement Network is a microservices-based system that enables distributed network measurement tasks through autonomous agents. The architecture leverages NATS for messaging, PostgreSQL for system data, ClickHouse for analytics, and follows a modular design for extensibility.
 
 ### Core Components
 
@@ -12,9 +12,9 @@ The Internet Measurement Network is a microservices-based system that enables di
 Autonomous measurement nodes that dynamically load modules to perform various network tests:
 - Dynamic module loading with hot-reloading capabilities
 - NATS integration for communication
-- OpenTelemetry instrumentation for observability
-- Crash recovery and error handling mechanisms
 - Heartbeat mechanism for health monitoring
+- Crash recovery and error handling mechanisms
+- Support for multiple measurement modules
 
 #### 2. Server (`server/`)
 Central coordination service built with FastAPI that:
@@ -24,6 +24,7 @@ Central coordination service built with FastAPI that:
 - Routes measurement requests to appropriate agents
 - Validates measurement requests against module schemas
 - Tracks workflow execution states
+- Stores results in ClickHouse analytics database
 
 #### 3. NATS Messaging System
 Message broker serving as the communication backbone:
@@ -32,21 +33,23 @@ Message broker serving as the communication backbone:
 - Health monitoring through heartbeat messages
 - Scalable, decoupled architecture
 
-#### 4. OpenTelemetry Collector
-Aggregates and processes observability data:
-- Receives traces, logs, and metrics from agents and server
-- Processes and batches telemetry data
-- Routes data to appropriate backends
+#### 4. Data Storage & Analytics
+- **PostgreSQL**: System database for agent registry and workflow tracking
+- **ClickHouse**: Analytics database for measurement results with high-performance queries
+- **ReplacingMergeTree engine**: Automatic deduplication of measurement data
 
-#### 5. Data Storage & Visualization
-- **OpenSearch**: Storage engine for telemetry data with daily indexing
-- **OpenSearch Dashboards**: Visualization interface for telemetry data
+#### 5. Observability Stack (Optional)
+Full OpenTelemetry observability pipeline:
+- **OpenTelemetry Collector**: Aggregates traces, logs, and metrics
+- **OpenSearch**: Storage engine for telemetry data
+- **Data Prepper**: Processes and transforms observability data
+- **OpenSearch Dashboards**: Visualization interface
 
 ## 🔄 Data Flow
 
 1. **Agent Registration**:
    - Agents send heartbeats to `agent.heartbeat_module` subject
-   - Server maintains agent registry and health status
+   - Server maintains agent registry and health status in PostgreSQL
 
 2. **Measurement Request**:
    - Client sends request to server API endpoint `/agent/{agent_id}/{module_name}`
@@ -61,13 +64,13 @@ Aggregates and processes observability data:
 4. **Result Reporting**:
    - Agent publishes results to output subject
    - Agent reports state transitions to `agent.module.state`
-   - Server captures workflow results and states
+   - Server captures workflow results and stores them in ClickHouse
 
-5. **Observability Pipeline**:
-   - OpenTelemetry data is collected and processed
-   - Data is transformed by Data Prepper
-   - Data is stored in OpenSearch indices
-   - Service maps are generated from trace data
+5. **Analytics Pipeline**:
+   - Measurement results stored in ClickHouse `measurements` table
+   - Agent heartbeats stored in `agent_heartbeats` table
+   - Module state transitions stored in `module_states` table
+   - Daily statistics aggregated via materialized view
 
 ## 🐳 Deployment
 
@@ -77,22 +80,34 @@ Aggregates and processes observability data:
 
 ### Quick Start
 
-1. **Start the complete system**:
+#### Core System (Current)
+1. **Start the core system**:
    ```bash
-   docker-compose up --build
+   docker-compose -f core-pipeline.yml up --build
    ```
 
 2. **Access services**:
-   - **Server API**: `localhost:8000`
+   - **Server API**: `localhost:8001` (server1), `localhost:8002` (server2)
    - **NATS Server**: `localhost:4222`
+   - **ClickHouse**: `localhost:8123` (HTTP), `localhost:9000` (Native)
+   - **PostgreSQL**: `localhost:5432`
+
+#### Full Observability Stack (Optional)
+1. **Start with full observability**:
+   ```bash
+   docker-compose -f docker/docker-compose.yml up --build
+   ```
+
+2. **Additional services**:
    - **OpenSearch**: `localhost:9200`
    - **OpenSearch Dashboards**: `localhost:5601`
+   - **OpenTelemetry Collector**: `localhost:4317`
 
 ### Individual Component Startup
 
 #### Server
 ```bash
-python3 -m fastapi run server/main.py
+python3 -m server.main
 ```
 
 #### Agent
@@ -229,37 +244,56 @@ curl -X POST http://localhost:8000/agent/{agent_id}/echo_module \
 ```
 
 ### Manual Verification
-1. Start the system with `docker-compose up`
+1. Start the system with `docker-compose -f core-pipeline.yml up`
 2. Get an active agent ID:
    ```bash
-   curl -s http://localhost:8000/agents/alive | jq 'keys[0]'
+   curl -s http://localhost:8001/agents/alive | jq 'keys[0]'
    ```
 3. Test module execution with the retrieved agent ID
 4. Monitor workflow states and results
 
-## 📈 Observability
+## 📊 Analytics & Monitoring
 
-### Trace Organization
-- **Heartbeat traces**: Consistent subject `agent.heartbeat_module`
-- **Module traces**: Agent-specific subjects for granular tracking
-- **Service maps**: Generated from trace data showing communication patterns
+### Data Storage
+- **ClickHouse Tables**:
+  - `measurements`: Main measurement results with comprehensive metadata
+  - `agent_heartbeats`: Agent health monitoring data
+  - `module_states`: Workflow state transitions
+  - `daily_stats`: Aggregated daily statistics (auto-populated)
+
+### Query Examples
+```sql
+-- Get measurement results for a workflow
+SELECT * FROM measurements WHERE workflow_id = 'your-workflow-id'
+
+-- Check agent heartbeats
+SELECT agent_id, agent_name, timestamp, alive FROM agent_heartbeats ORDER BY timestamp DESC LIMIT 10
+
+-- Get daily statistics
+SELECT date, agent_id, module_name, total_executions, successful_executions FROM daily_stats
+```
 
 ### Monitoring Endpoints
 - **NATS Monitoring**: `localhost:8222`
-- **OpenTelemetry Collector**: `localhost:8888/metrics`
-- **Agent Metrics**: Individual ports per agent
+- **ClickHouse HTTP Interface**: `localhost:8123`
+- **PostgreSQL**: `localhost:5432`
+
+### Observability (Optional)
+- **OpenSearch Dashboards**: `localhost:5601` (visualization)
+- **OpenTelemetry Collector**: `localhost:4317` (telemetry collection)
+- **Data Prepper**: `localhost:21891-21893` (data processing)
 
 ## 🚀 Development
 
 ### Project Structure
 ```
 ├── docker/              # Docker configurations
-├── modules/             # Agent modules (ping, echo, faulty)
+├── modules/             # Agent modules (ping, echo, faulty, heartbeat)
 ├── otlp/                # OpenTelemetry collector config
 ├── server/              # FastAPI server implementation
 ├── src/aiori_agent/     # Agent core implementation
 ├── tests/               # Test scripts
-└── docker-compose.yml   # System orchestration
+└── core-pipeline.yml    # Main system orchestration
 ```
 
 ### Adding New Modules
@@ -281,13 +315,19 @@ curl -X POST http://localhost:8000/agent/{agent_id}/echo_module \
 # NATS configuration
 NATS_URL=nats://localhost:4222
 
-# OpenTelemetry endpoints
+# Database
+DBOS_SYSTEM_DATABASE_URL=postgresql://your_db_user:your_db_password@localhost:5432/your_database
+
+# ClickHouse
+CLICKHOUSE_HOST=clickhouse
+CLICKHOUSE_PORT=8123
+CLICKHOUSE_DATABASE=imn
+CLICKHOUSE_USERNAME=your_clickhouse_user
+
+# OpenTelemetry (Optional)
 OTLP_TRACE_ENDPOINT=otel-collector:4317
 OTLP_METRICS_ENDPOINT=otel-collector:4317
 OTLP_LOGS_ENDPOINT=otel-collector:4317
-
-# Database
-DBOS_SYSTEM_DATABASE_URL=sqlite:///db/data.db
 ```
 
 ### Module Subject Patterns
@@ -301,15 +341,25 @@ Each module defines its own subject naming pattern:
 1. **Distributed Architecture**: Scalable agent-based measurement system
 2. **Real-time Coordination**: Instantaneous command and control
 3. **Workflow Tracking**: Detailed state management for all operations
-4. **Extensible Design**: Easy addition of new measurement modules
-5. **Comprehensive Observability**: Full tracing, logging, and metrics
-6. **Error Handling**: Robust error detection and reporting
-7. **Hot Reloading**: Dynamic module updates without restarts
+4. **High-Performance Analytics**: ClickHouse for fast querying of measurement data
+5. **Extensible Design**: Easy addition of new measurement modules
+6. **Robust Data Storage**: PostgreSQL for system data, ClickHouse for analytics
+7. **Error Handling**: Robust error detection and reporting
+
+## 📋 Current Status
+
+The system is fully operational with:
+- Multiple server instances running
+- Multiple agent instances actively monitoring
+- ClickHouse storing measurement results with automatic deduplication
+- PostgreSQL maintaining agent registry and workflow states
+
+**Note**: Currently running core system only. Full observability stack (OpenSearch, OpenTelemetry) is available but not active.
 
 ## 📋 Future Enhancements
 
-1. **Advanced Analytics**: ML-based anomaly detection
-2. **Dashboard Integration**: Custom visualization for measurement data
+1. **Advanced Analytics**: ML-based anomaly detection on measurement data
+2. **Dashboard Integration**: Custom visualization for measurement analytics
 3. **Security Enhancements**: Authentication and encryption
-4. **Persistence Layer**: Long-term storage for historical data
-5. **Multi-region Support**: Geographically distributed agents
+4. **Multi-region Support**: Geographically distributed agents
+5. **Performance Optimization**: Query optimization and indexing strategies

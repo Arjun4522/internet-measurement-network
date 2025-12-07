@@ -687,9 +687,10 @@ async def handle_heartbeat(msg: Msg) -> None:
                                 clickhouse_data["load_avg_5m"] = float(loadavg[1])
                                 clickhouse_data["load_avg_15m"] = float(loadavg[2])
                             elif isinstance(loadavg, dict):
-                                clickhouse_data["load_avg_1m"] = float(loadavg.get("1m", 0.0))
-                                clickhouse_data["load_avg_5m"] = float(loadavg.get("5m", 0.0))
-                                clickhouse_data["load_avg_15m"] = float(loadavg.get("15m", 0.0))
+                                # Handle both field naming conventions
+                                clickhouse_data["load_avg_1m"] = float(loadavg.get("1m", loadavg.get("field_1m", 0.0)))
+                                clickhouse_data["load_avg_5m"] = float(loadavg.get("5m", loadavg.get("field_5m", 0.0)))
+                                clickhouse_data["load_avg_15m"] = float(loadavg.get("15m", loadavg.get("field_15m", 0.0)))
                         except (TypeError, ValueError, IndexError, KeyError) as e:
                             # If there's any issue with loadavg data, use defaults
                             print(f"[Heartbeat] Warning: Could not parse loadavg data: {e}")

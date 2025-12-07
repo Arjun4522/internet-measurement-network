@@ -213,35 +213,45 @@ class ClickHouseManager:
         workflow_id = data.get('workflow_id', 'unknown')
         
         try:
-            # Prepare data for insertion
-            insert_data = [{
-                'workflow_id': data.get('workflow_id', ''),
-                'agent_id': data.get('agent_id', ''),
-                'module_name': data.get('module_name', ''),
-                'created_at': data.get('created_at', datetime.now(timezone.utc)),
-                'completed_at': data.get('completed_at', datetime.now(timezone.utc)),
-                'measurement_data': self._safe_json_encode(data.get('measurement_data')),
-                'agent_hostname': data.get('agent_hostname', ''),
-                'agent_name': data.get('agent_name', ''),
-                'agent_pid': data.get('agent_pid', 0),
-                'system_machine': data.get('system_machine', ''),
-                'system_node_name': data.get('system_node_name', ''),
-                'system_platform': data.get('system_platform', ''),
-                'system_processor': data.get('system_processor', ''),
-                'system_release': data.get('system_release', ''),
-                'system_version': data.get('system_version', ''),
-                'network_interfaces': self._safe_json_encode(data.get('network_interfaces')),
-                'user_name': data.get('user_name', ''),
-                'user_uid': data.get('user_uid', 0),
-                'user_gid': data.get('user_gid', 0),
-                'user_home_dir': data.get('user_home_dir', ''),
-                'user_shell': data.get('user_shell', ''),
-                'request_data': self._safe_json_encode(data.get('request_data')),
-                'success': data.get('success', True)
-            }]
+            # Prepare data for insertion as a list of values in the correct order
+            # This matches the table schema order
+            insert_data = [(
+                data.get('workflow_id', ''),
+                data.get('agent_id', ''),
+                data.get('module_name', ''),
+                data.get('created_at', datetime.now(timezone.utc)),
+                data.get('completed_at', datetime.now(timezone.utc)),
+                self._safe_json_encode(data.get('measurement_data')),
+                data.get('agent_hostname', ''),
+                data.get('agent_name', ''),
+                data.get('agent_pid', 0),
+                data.get('system_machine', ''),
+                data.get('system_node_name', ''),
+                data.get('system_platform', ''),
+                data.get('system_processor', ''),
+                data.get('system_release', ''),
+                data.get('system_version', ''),
+                self._safe_json_encode(data.get('network_interfaces')),
+                data.get('user_name', ''),
+                data.get('user_uid', 0),
+                data.get('user_gid', 0),
+                data.get('user_home_dir', ''),
+                data.get('user_shell', ''),
+                self._safe_json_encode(data.get('request_data')),
+                data.get('success', True)
+            )]
             
-            # FIXED: Insert without column_names parameter
-            self.client.insert('measurements', insert_data)
+            # Column names in the correct order
+            column_names = [
+                'workflow_id', 'agent_id', 'module_name', 'created_at', 'completed_at',
+                'measurement_data', 'agent_hostname', 'agent_name', 'agent_pid',
+                'system_machine', 'system_node_name', 'system_platform', 'system_processor',
+                'system_release', 'system_version', 'network_interfaces', 'user_name',
+                'user_uid', 'user_gid', 'user_home_dir', 'user_shell', 'request_data', 'success'
+            ]
+            
+            # Insert with explicit column names and data as list of tuples
+            self.client.insert('measurements', insert_data, column_names=column_names)
             print(f"[ClickHouse] ✓ Measurement inserted for workflow {workflow_id}")
             return True
             
@@ -329,19 +339,26 @@ class ClickHouseManager:
         workflow_id = data.get('workflow_id', 'unknown')
         
         try:
-            # Prepare data for insertion
-            insert_data = [{
-                'workflow_id': data.get('workflow_id', ''),
-                'agent_id': data.get('agent_id', ''),
-                'module_name': data.get('module_name', ''),
-                'state': data.get('state', ''),
-                'timestamp': data.get('timestamp', datetime.now(timezone.utc)),
-                'error_message': data.get('error_message', None),
-                'details': self._safe_json_encode(data.get('details'))
-            }]
+            # Prepare data for insertion as a list of values in the correct order
+            # This matches the table schema order
+            insert_data = [(
+                data.get('workflow_id', ''),
+                data.get('agent_id', ''),
+                data.get('module_name', ''),
+                data.get('state', ''),
+                data.get('timestamp', datetime.now(timezone.utc)),
+                data.get('error_message', None),
+                self._safe_json_encode(data.get('details'))
+            )]
             
-            # FIXED: Insert without column_names parameter
-            self.client.insert('module_states', insert_data)
+            # Column names in the correct order
+            column_names = [
+                'workflow_id', 'agent_id', 'module_name', 'state', 'timestamp',
+                'error_message', 'details'
+            ]
+            
+            # Insert with explicit column names and data as list of tuples
+            self.client.insert('module_states', insert_data, column_names=column_names)
             print(f"[ClickHouse] ✓ Module state inserted for workflow {workflow_id}")
             return True
             
