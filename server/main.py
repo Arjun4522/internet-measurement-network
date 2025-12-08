@@ -308,9 +308,28 @@ class AgentCache:
         """Get all dead agents"""
         return {aid: agent for aid, agent in self.agents.items() if not agent.alive}
 
+# Import new managers
+# try:
+#     from subscription_manager import SubscriptionManager
+#     from heartbeat_sampler import HeartbeatSampler
+# except ImportError:
+#     # Fallback for relative imports
+#     from .subscription_manager import SubscriptionManager
+#     from .heartbeat_sampler import HeartbeatSampler
+
+# Import new managers
+from subscription_manager import SubscriptionManager
+from heartbeat_sampler import HeartbeatSampler
+
 # Global state instances
 workflow_state = WorkflowState()
 agent_cache = AgentCache()
+
+# Subscription manager (will be initialized after NATS connection)
+subscription_manager = None
+
+# Heartbeat sampler
+heartbeat_sampler = HeartbeatSampler(sample_interval_seconds=30)  # Sample every 30 seconds
 
 # ClickHouse manager
 clickhouse_manager = None
@@ -529,42 +548,53 @@ async def setup_agent_subscriptions_workflow(
     Durable workflow for setting up agent result subscriptions.
     Ensures reliable subscription to all agent output topics.
     """
-    topics = set()
+    # Use subscription manager to avoid duplicates
+    if subscription_manager:
+        topics = await subscription_manager.subscribe_to_agent(
+            agent_id, module_specs, result_handler
+        )
+    else:
+        # Fallback to original logic if subscription manager not initialized
+        topics = set()
+        generic_topic = f"agent.{agent_id}.out"
+        topics.add(generic_topic)
+        
+        for module_name, module_config in module_specs.items():
+            if "output_subject" in module_config:
+                output_topic = module_config["output_subject"]
+                if output_topic:
+                    topics.add(output_topic)
+        
+        # Subscribe to all topics
+        for topic in topics:
+            await nats_client.subscribe(topic, cb=result_handler)
     
-    # Generic output topic
-    generic_topic = f"agent.{agent_id}.out"
-    topics.add(generic_topic)
-    
-    # Module-specific output topics
-    for module_name, module_config in module_specs.items():
-        if "output_subject" in module_config:
-            output_topic = module_config["output_subject"]
-            if output_topic:
-                topics.add(output_topic)
-    
-    # Subscribe to all topics
-    async def result_handler(msg: Msg):
-        """Handler for module results - updates workflow state"""
-        try:
-            data = json.loads(msg.data.decode())
-            workflow_id = data.get("workflow_id")
-            
-            if not workflow_id:
-                print(f"[Result] Received result without workflow_id, skipping")
-                return
-            
-            # Check if workflow exists
-            if workflow_id not in workflow_state.workflows:
-                print(f"[Result] Unknown workflow: {workflow_id}")
-                return
-            
-            # Update workflow state based on success
-            success = data.get("success", True)
-            final_state = "COMPLETED" if success else "FAILED"
-            workflow_state.set_state(workflow_id, final_state, result_received=True)
-            
-            # Push measurement data to ClickHouse if available
-            if CLICKHOUSE_AVAILABLE and clickhouse_manager:
+    print(f"[Subscription] Agent {agent_id}: {list(topics)}")
+    return {"agent_id": agent_id, "subscribed_topics": list(topics)}
+
+
+async def result_handler(msg: Msg):
+    """Handler for module results - updates workflow state"""
+    try:
+        data = json.loads(msg.data.decode())
+        workflow_id = data.get("workflow_id")
+        
+        if not workflow_id:
+            print(f"[Result] Received result without workflow_id, skipping")
+            return
+        
+        # Check if workflow exists
+        if workflow_id not in workflow_state.workflows:
+            print(f"[Result] Unknown workflow: {workflow_id}")
+            return
+        
+        # Update workflow state based on success
+        success = data.get("success", True)
+        final_state = "COMPLETED" if success else "FAILED"
+        workflow_state.set_state(workflow_id, final_state, result_received=True)
+        
+        # Push measurement data to ClickHouse if available
+        if CLICKHOUSE_AVAILABLE and clickhouse_manager:
                 try:
                     # Get workflow information
                     workflow_data = workflow_state.workflows.get(workflow_id, {})
@@ -629,14 +659,9 @@ async def setup_agent_subscriptions_workflow(
                 except Exception as e:
                     print(f"[ClickHouse] Error inserting measurement data: {e}")
             
-        except Exception as e:
-            print(f"[Result] Error processing result: {e}")
-    
-    for topic in topics:
-        await subscribe_to_nats(topic, result_handler)
-    
-    print(f"[Subscription] Agent {agent_id}: {list(topics)}")
-    return {"agent_id": agent_id, "subscribed_topics": list(topics)}
+    except Exception as e:
+        print(f"[ResultHandler] Error processing message: {e}")
+
 
 # ============================================================================
 # NATS HANDLERS
@@ -698,8 +723,11 @@ async def handle_heartbeat(msg: Msg) -> None:
                             clickhouse_data["load_avg_5m"] = 0.0
                             clickhouse_data["load_avg_15m"] = 0.0
                 
-                # Insert into ClickHouse using safe wrapper
-                safe_clickhouse_insert("heartbeat insertion", clickhouse_manager.insert_heartbeat, clickhouse_data)
+                # Use heartbeat sampler to avoid inserting every heartbeat
+                if heartbeat_sampler.should_insert_heartbeat(agent_id):
+                    safe_clickhouse_insert("heartbeat insertion", clickhouse_manager.insert_heartbeat, clickhouse_data)
+                else:
+                    print(f"[HeartbeatSampler] Skipping heartbeat insertion for {agent_id} (too soon)")
             except Exception as e:
                 print(f"[ClickHouse] Error inserting heartbeat data: {e}")
         
@@ -798,6 +826,11 @@ async def nats_connect_task():
         reconnect_time_wait=0
     )
     print(f"[NATS] Connected to {config.NATS_URL}")
+    
+    # Initialize subscription manager
+    global subscription_manager
+    subscription_manager = SubscriptionManager(nats_client)
+    print("[Subscription] Manager initialized")
     
     # Subscribe to heartbeats and module states
     await nats_client.subscribe(config.HEARTBEAT_SUBJECT, cb=handle_heartbeat)

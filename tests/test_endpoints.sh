@@ -70,7 +70,7 @@ test_health_endpoints() {
     
     # Root endpoint
     log "Testing root endpoint..."
-    response=$(curl -s "$BASE_URL/")
+    response=$(curl -sf "$BASE_URL/")
     echo "$response" | jq '.'
     
     if [ "$(echo "$response" | jq -r '.status')" != "ok" ]; then
@@ -80,10 +80,10 @@ test_health_endpoints() {
     
     # Agents endpoints
     log "Testing agents endpoints..."
-    curl -s "$BASE_URL/agents" | jq '.' > /dev/null
-    curl -s "$BASE_URL/agents/alive" | jq '.' > /dev/null
-    curl -s "$BASE_URL/agents/dead" | jq '.' > /dev/null
-    curl -s "$BASE_URL/agents/$TEST_AGENT_ID" | jq '.' > /dev/null
+    curl -sf "$BASE_URL/agents" | jq '.' > /dev/null
+    curl -sf "$BASE_URL/agents/alive" | jq '.' > /dev/null
+    curl -sf "$BASE_URL/agents/dead" | jq '.' > /dev/null
+    curl -sf "$BASE_URL/agents/$TEST_AGENT_ID" | jq '.' > /dev/null
     
     success "Health endpoints working"
 }
@@ -231,12 +231,12 @@ test_debug_endpoints() {
     
     # Debug state
     log "Checking debug state..."
-    debug_response=$(curl -s "$BASE_URL/debug/state")
+    debug_response=$(curl -sf "$BASE_URL/debug/state")
     echo "$debug_response" | jq '.'
     
     # Verify agent is alive
     agent_count=$(echo "$debug_response" | jq '.agents.alive')
-    if [ "$agent_count" -gt 0 ]; then
+    if [[ "$agent_count" =~ ^[0-9]+$ ]] && [ "$agent_count" -gt 0 ]; then
         success "Agent is alive"
     else
         warning "No alive agents detected"
