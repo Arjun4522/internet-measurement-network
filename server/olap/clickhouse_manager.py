@@ -172,7 +172,12 @@ class ClickHouseManager:
                             parts = clean_statement.split()
                             for j, part in enumerate(parts):
                                 if part.upper() in ["TABLE", "VIEW"] and j + 2 < len(parts):
-                                    table_name = parts[j + 2]
+                                    # Skip "IF" "NOT" "EXISTS" keywords if present
+                                    offset = 0
+                                    while j + 2 + offset < len(parts) and parts[j + 2 + offset].upper() in ["IF", "NOT", "EXISTS"]:
+                                        offset += 1
+                                    if j + 2 + offset < len(parts):
+                                        table_name = parts[j + 2 + offset]
                                     break
                         
                         print(f"[ClickHouse] [{i+1}/{len(CREATE_TABLE_STATEMENTS)}] Creating {table_name}...")
